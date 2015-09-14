@@ -8,6 +8,7 @@ from cocos import sprite, layer, actions, collision_model, draw, euclid
 
 from cocos.actions import Reverse, Repeat, ScaleBy, Rotate
 import pyglet
+from pyglet.window import key as keycode
 
 from primitives import Circle, Rect
 import config
@@ -37,7 +38,7 @@ class CollidableSprite(sprite.Sprite):
         self.schedule(self.update)
 
         print log.level
-        if log.level == logging.DEBUG:
+        if log.level == logging.WARNING:
             print 'doing debug'
             r,g,b,a = rgba('yellow', 100)
             c = layer.ColorLayer(r,g,b,a,
@@ -47,9 +48,22 @@ class CollidableSprite(sprite.Sprite):
             c.position = -c.width/2, -c.height/2
 
         self.rect = self.get_rect()
+        self.rect.width = int(self.width*width_multi)
+        self.rect.height = int(self.height*height_multi)
 
     def update(self, *args, **kwargs):
+
+        if self.are_actions_running():
+            self.rect.center = self.position
+        else:
+            self.position = self.rect.center
         self.cshape.center = self.position
+
+    def set_rect(self, attr, value):
+        """
+        Set a rect attribute and update sprite position accordingly.
+        """
+        self.rect.__setattr__(attr, value)
         self.position = self.rect.center
 
     def draw(self):
@@ -60,31 +74,191 @@ class CollidableSprite(sprite.Sprite):
         # c = Circle(x=x, y=y, width=self.cshape.r*2,  color=(0,0,0,0.4))
         # c.render()
 
+
+class SteiniMove(actions.Action):
+    """Move the target based on parameters on the target.
+
+    For movement the parameters are::
+
+        target.position = (x, y)
+        target.velocity = (dx, dy)
+        target.acceleration = (ddx, ddy) = (0, 0)
+        target.gravity = 0
+
+    And rotation::
+
+        target.rotation
+        target.dr
+        target.ddr
+    """
+
+    def init(self, *args, **kwargs):
+        self.fall_time = 0
+
+    def step(self, dt):
+        x, y = self.target.position
+        dx, dy = self.target.velocity
+        ddx, ddy = getattr(self.target, 'acceleration', (0, 0))
+        if self.target.is_on_solid_ground():
+            gravity = 0
+            self.fall_time = 0.0
+        else:
+            gravity = getattr(self.target, 'gravity', 0)
+            gravity = gravity*self.fall_time
+            log.debug('Gravity: %s, fall_time: %s', gravity, self.fall_time)
+            self.fall_time += dt
+        dx += ddx * dt
+        dy += (ddy + gravity) * dt
+        self.target.velocity = (dx, dy)
+        x += dx * dt
+        y += dy * dt
+        # Save old bottom position (for one way platforms)
+        self.target.old_bottom = self.target.rect.bottom
+        self.target.old_left = self.target.rect.left
+        self.target.old_right = self.target.rect.right
+        self.target.position = (x, y)
+        dr = getattr(self.target, 'dr', 0)
+        ddr = getattr(self.target, 'ddr', 0)
+        if dr or ddr:
+            dr = self.target.dr = dr + ddr*dt
+        if dr:
+            self.target.rotation += dr * dt
+
+
 class Player(CollidableSprite):
 
     def __init__(self, image, *args, **kwargs):
         super(Player, self).__init__(image, *args, **kwargs)
+        self.left_image = self.left_image or image
+        self.right_image = self.right_image or image
+        # Maximum walk speed
+        self.walk_speed = kwargs.get('walk_speed', 1200)
+        self.walk_velocity_cap = kwargs.get('walk_velocity_cap', 1000)
+        # Maximum jump strength
+        self.jump_strength = kwargs.get('jump_strength', 5000)
+
+        self.velocity = (0, 0)
+        self.acceleration = (0, 0)
+        self.gravity = -20000
+        self.walking = False
+
+        self.move_action = SteiniMove()
+        self.do(self.move_action)
+        self.old_bottom = self.rect.bottom
+        self.old_left = self.rect.left
+        self.old_right = self.rect.right
+
+    def _set_x_accel(self, value):
+        self.acceleration = value, self.acceleration[1]
+
+    def _set_y_accel(self, value):
+        self.acceleration = self.acceleration[0], value
+
+    def _set_x_velocity(self, value):
+        self.velocity = value, self.velocity[1]
+
+    def _set_y_velocity(self, value):
+        self.velocity = self.velocity[0], value
 
     def walk_left(self):
-
-        pass
+        self.image = self.left_image
+        log.debug(self.image)
+        self.walking = True
+        if self.velocity[0] <= -self.walk_velocity_cap:
+            self._set_x_accel(0)
+        else:
+            self.acceleration = -self.walk_speed, self.acceleration[1]
 
     def walk_right(self):
-        pass
+        self.image = self.right_image
+        log.debug(self.image)
+        self.walking = True
+        if self.velocity[0] >= self.walk_velocity_cap:
+            self._set_x_accel(0)
+        else:
+            self.acceleration = self.walk_speed, self.acceleration[1]
+
+    def stop_walk(self):
+        """
+        Decellerate to stop position.
+        """
+        self.walking = False
+        if -1 <= self.velocity[0] <= 1:
+            self.acceleration = 0, self.acceleration[1]
+            self.velocity = 0, self.velocity[1]
+            return
+        if self.velocity[0] < 0:
+            self.acceleration = self.walk_speed, self.acceleration[1]
+        elif self.velocity[0] > 0:
+            self.acceleration = -self.walk_speed, self.acceleration[1]
 
     def jump(self):
-        pass
+        if self.velocity[1] >= 0:
+            self._set_y_accel(self.jump_strength)
+
+    def end_jump(self):
+        self._set_y_accel(0)
+        self.can_jump = True
 
     def move_down(self):
+        self._set_y_accel(-self.jump_strength)
+
+    def reset_move(self):
         pass
+
+    def is_on_solid_ground(self):
+        for platform in self.parent.get('platforms_layer').get_children():
+            if (platform.rect.top == self.rect.bottom
+                and (self.rect.right > platform.rect.left
+                     and self.rect.left < platform.rect.right)):
+                return True
+        return False
+
+    def stop_on_platform(self):
+        # if self.velocity[1] >= 0:
+        #     return
+        for ob in self.parent.cm.objs_colliding(self):
+            if not isinstance(ob, Platform):
+                continue
+            if ob.is_wall:
+                wallcrash = False
+                if self.velocity[0] > 0:
+                    # moving right
+                    self.set_rect('right', ob.rect.left)
+                    wallcrash = True
+                    self._set_x_velocity(-500)
+                elif self.velocity[0] < 0:
+                    self.set_rect('left', ob.rect.right)
+                    wallcrash = True
+                    self._set_x_velocity(500)
+                if wallcrash:
+                    self._set_x_accel(0)
+
+            if self.old_bottom >= ob.rect.top and self.velocity[1] < 0:
+                self.set_rect('bottom', ob.rect.top)
+                self._set_y_accel(0)
+                self._set_y_velocity(0)
+                return
+
+    def update(self, *args, **kwargs):
+
+        super(Player, self).update(*args, **kwargs)
+        self.stop_on_platform()
+        log.debug('Velocity: %s, Acceleration: %s',
+                  self.velocity, self.acceleration)
+        if not self.walking:
+            self.stop_walk()
 
 
 class BallMan(Player):
 
     def __init__(self, *args, **kwargs):
-        super(BallMan, self).__init__('ballman128x128.png',
-                                      *args, width_multi=0.8, height_multi=0.8,
+        self.right_image = pyglet.resource.image('ballman128x128.png')
+        self.left_image = pyglet.resource.image('ballman128x128left.png')
+        super(BallMan, self).__init__(self.right_image,
+                                      *args, width_multi=0.6, height_multi=0.8,
                                       **kwargs)
+
 
 class Platform(CollidableSprite):
 
@@ -92,11 +266,19 @@ class Platform(CollidableSprite):
         super(Platform, self).__init__(image,
                                        width_multi=1,
                                        height_multi=1)
+        self.can_traverse_down = True
+        self.is_wall = False
 
 
 class GreyPlatform(Platform):
     def __init__(self):
-        super(GreyPlatform, self).__init__('greyplatform256x64.png')
+        super(GreyPlatform, self).__init__('greyplatform256x24.png')
+
+
+class Wall(Platform):
+    def __init__(self):
+        super(Wall, self).__init__('wall.png')
+        self.is_wall = True
 
 
 class Level(layer.Layer):
@@ -107,11 +289,15 @@ class Level(layer.Layer):
         # platforms as children
         self.add(player, name='player', z=2)
         self.add(self.build_platforms(), name='platforms_layer', z=1)
-        self.add(self.build_background(), name='background_layer')
+        self.add(self.build_background(), name='background_layer', z=0)
         self.cm = collision_model.CollisionManagerBruteForce()
         self.cm.add(player)
         for p in self.get('platforms_layer').get_children():
             self.cm.add(p)
+
+        self.schedule(self.update)
+        self.is_event_handler = True
+        self.keys_pressed = set()
 
     def build_platforms():
         return layer.Layer()
@@ -119,17 +305,36 @@ class Level(layer.Layer):
     def build_background():
         return layer.Layer()
 
+    def on_key_press(self, key, modifiers):
+        self.keys_pressed.add(key)
+
+    def on_key_release(self, key, modifiers):
+        self.keys_pressed.remove(key)
+
+    def update(self, *args, **kwargs):
+        p = self.get('player')
+        if keycode.LEFT in self.keys_pressed:
+            p.walk_left()
+        if keycode.RIGHT in self.keys_pressed:
+            p.walk_right()
+        if (keycode.RIGHT not in self.keys_pressed
+            and keycode.LEFT not in self.keys_pressed):
+            p.stop_walk()
+        if keycode.SPACE not in self.keys_pressed:
+            p.end_jump()
+        if keycode.SPACE in self.keys_pressed:
+            p.jump()
+        if keycode.DOWN in self.keys_pressed:
+            p.move_down()
+
 
 class Level0(Level):
     def __init__(self, player):
         super(Level0, self).__init__(player)
         # Place player on a random platform
         platform = random.choice(self.get('platforms_layer').get_children())
-        #player.position = platform.x, (platform.y+platform.height/2)+player.height/2
-        #player.get_rect().bottom = platform.get_rect().top
-        #player.position = 20,20
-        player.rect.bottom = platform.rect.top
-        player.rect.left = platform.rect.left
+        player.set_rect('bottom', platform.rect.top)
+        player.set_rect('left', platform.rect.left)
 
     def build_platforms(self):
         x_pos = 0
@@ -139,6 +344,7 @@ class Level0(Level):
             p.rect.left, p.rect.bottom = x_pos, 0
             l.add(p)
             x_pos += p.width
+            p.can_traverse_down = False
         p = GreyPlatform()
         p.rect.left, p.rect.bottom = 200, 160
         l.add(p)
@@ -148,6 +354,17 @@ class Level0(Level):
         p = GreyPlatform()
         p.rect.left, p.rect.bottom = 400, 400
         l.add(p)
+
+        window = cocos.director.director.get_window_size()
+
+        w = Wall()
+        w.rect.left = 0
+        w.rect.bottom = 24
+        l.add(w)
+        w = Wall()
+        w.rect.right = window[0]
+        w.rect.bottom = 24
+        l.add(w)
         return l
 
     def build_background(self):
@@ -164,25 +381,3 @@ level0 = Level0(BallMan())
 main_scene = cocos.scene.Scene(level0)
 
 cocos.director.director.run(main_scene)
-
-
-
-class HelloWorld(cocos.layer.Layer):
-    def __init__(self):
-        super(HelloWorld, self).__init__()
-        label = cocos.text.Label('HelloWorld',
-                                 font_name='Arial',
-                                 font_size=32,
-                                 anchor_x='center', anchor_y='center')
-        label.position = 320,240
-        self.add(label)
-
-        sprite = cocos.sprite.Sprite('ballman.png')
-        sprite.position = 320, 240
-        sprite.scale = 1
-        self.add(sprite, z=1)
-
-        scale = ScaleBy(3, duration=2)
-        label.do(Repeat(scale + Reverse(scale)))
-        rotate = Rotate(360, duration=5)
-        sprite.do(Repeat(rotate))
