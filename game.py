@@ -11,6 +11,7 @@ import pyglet
 from pyglet.window import key as keycode
 
 from primitives import Circle
+from util import distance
 import config
 
 # Have to do this apparently, otherwise resources aren't found?
@@ -138,8 +139,8 @@ class Player(CollidableSprite):
         self.floors_enabled = True
 
         # Maximum walk speed
-        self.walk_speed = kwargs.get('walk_speed', 5000)
-        self.walk_velocity_cap = kwargs.get('walk_velocity_cap', 1000)
+        self.walk_speed = kwargs.get('walk_speed', 3000)
+        self.walk_velocity_cap = kwargs.get('walk_velocity_cap', 2000)
         # Maximum jump strength
         self.jump_strength = kwargs.get('jump_strength', 1200)
         self.velocity = (0, 0)
@@ -232,23 +233,48 @@ class Player(CollidableSprite):
         for ob in self.parent.cm.objs_colliding(self):
             if not isinstance(ob, Platform):
                 continue
-            if ob.is_wall:
-                if self.velocity[0] > 0:
-                    # moving right
-                    self.set_rect('right', ob.rect.left)
-                    self._set_x_velocity(-self.velocity[0])
-                    self._set_x_accel(-self.walk_speed)
-                elif self.velocity[0] < 0:
-                    self.set_rect('left', ob.rect.right)
-                    self._set_x_velocity(abs(self.velocity[0]))
-                    self._set_x_accel(self.walk_speed)
             if ((self.floors_enabled or not ob.can_traverse_down)
-                and self.old_bottom >= ob.rect.top
+                and self.old_bottom >= ob.rect.top and ob.is_walkable
                 and self.velocity[1] < 0):
                 self.set_rect('bottom', ob.rect.top)
                 self._set_y_accel(0)
                 self._set_y_velocity(0)
                 return
+            if ob.is_wall:
+                # Only do X collisions if
+                # player is partially outside of x-bounds
+                # of box.
+                # This is to make sure that player can jump into the
+                # bottom of the box without being cast to the side of it.
+                # Same with Y collisions, only if bottom of the player is
+                # outside the box
+                if (self.velocity[0] > 0
+                    and self.rect.right > ob.rect.left
+                    and self.rect.left < ob.rect.left):
+                    # moving right
+                    self.set_rect('right', ob.rect.left)
+                    self._set_x_velocity(self.velocity[0]*-0.8)
+                    self._set_x_accel(-self.walk_speed)
+                elif (self.velocity[0] < 0
+                      and self.rect.left < ob.rect.right
+                      and self.rect.right > ob.rect.right):
+                    # moving left
+                    self.set_rect('left', ob.rect.right)
+                    self._set_x_velocity(self.velocity[0]*-0.8)
+                    self._set_x_accel(self.walk_speed)
+                if (self.velocity[1] > 0
+                    and self.rect.top > ob.rect.bottom
+                    and self.rect.bottom < ob.rect.bottom):
+                    # Moving up
+                    self.set_rect('top', ob.rect.bottom)
+                    self._set_y_velocity(-self.velocity[1])
+
+
+    # Attack stuff
+    def ranged_attack(self, target):
+        bullet = Bullet(player=self)
+        bullet.position = self.position
+        bullet.go(target)
 
     def update(self, *args, **kwargs):
 
@@ -261,6 +287,13 @@ class Player(CollidableSprite):
         # Enable floors again after movement is done
         # so we won't keep falling through
         self.floors_enabled = True
+        if abs(self.velocity[0]) > self.walk_velocity_cap:
+            xvel = self.velocity[0]
+            if xvel > 0:
+                newvel = self.walk_velocity_cap
+            else:
+                newvel = -self.walk_velocity_cap
+            self._set_x_velocity(newvel)
 
 
 class AIPlayer(Player):
@@ -278,18 +311,29 @@ class BallMan(Player):
                                       *args, width_multi=0.6, height_multi=0.8,
                                       **kwargs)
 
-    def ranged_attack(self, target):
-        bullet = CollidableSprite
+
 
 
 class Bullet(CollidableSprite):
 
     def __init__(self, *args, **kwargs):
         image = pyglet.resource.image('bullet8x8.png')
-        self.player = kwargs['player']
+        self.player = kwargs.pop('player')
         super(Bullet, self).__init__(image, *args,
                                      width_multi=1, height_multi=1,
                                      **kwargs)
+        self.player.parent.add(self, z=3)
+        self.velocity = 1000
+
+    def go(self, target):
+        log.debug('Bullet position: %s, player.position: %s, target: %s',
+                  self.position, self.player.position, target)
+        d = distance(target, self.position)
+        t = d/self.velocity
+        self.do(actions.MoveTo(target, t)+actions.CallFunc(self.kill))
+
+    def kill_self(self, *args, **kwargs):
+        self.kill()
 
 class Platform(CollidableSprite):
 
@@ -313,6 +357,33 @@ class Wall(Platform):
         self.is_wall = True
         self.is_walkable = False
 
+class ObstacleBox(Platform):
+
+    def __init__(self):
+        super(ObstacleBox, self).__init__('obstaclebox128x128.png')
+        self.is_wall = True
+        self.is_walkable = True
+        self.can_traverse_down = False
+
+class MouseDisplay(layer.Layer):
+
+    def __init__(self, *args, **kwargs):
+        super(MouseDisplay, self).__init__(*args, **kwargs)
+        self.width = 1280
+        self.height = 720
+        self.crosshair = sprite.Sprite('crosshair.png')
+        self.add(self.crosshair)
+        self.is_event_handler = True
+        self.crosshair.position = 500, 500
+
+    def on_mouse_motion(self, x, y, dx, dy):
+        self.update_crosshair(x, y)
+
+    def on_mouse_drag(self, x, y, dx, dy, buttons, modifiers):
+        self.update_crosshair(x, y)
+
+    def update_crosshair(self, x, y):
+        self.crosshair.position = x, y
 
 class Level(layer.Layer):
 
@@ -331,6 +402,7 @@ class Level(layer.Layer):
         self.schedule(self.update)
         self.is_event_handler = True
         self.keys_pressed = set()
+        self.add(MouseDisplay(), name='mouse_display', z=3)
 
     def build_platforms():
         return layer.Layer()
@@ -343,6 +415,10 @@ class Level(layer.Layer):
 
     def on_key_release(self, key, modifiers):
         self.keys_pressed.remove(key)
+
+    def on_mouse_press(self, x, y, buttons, modifiers):
+        p = self.get('player')
+        p.ranged_attack((x, y))
 
     def update(self, *args, **kwargs):
         p = self.get('player')
@@ -389,13 +465,30 @@ class Level0(Level):
             x_pos += p.width
             p.can_traverse_down = False
         p = GreyPlatform()
-        p.rect.left, p.rect.bottom = 200, 160
+        p.rect.left, p.rect.bottom = 100, 160
         l.add(p)
         p = GreyPlatform()
-        p.rect.left, p.rect.top = 600, 200
+        p.rect.left, p.rect.top = 500, 200
         l.add(p)
         p = GreyPlatform()
-        p.rect.left, p.rect.bottom = 400, 400
+        p.rect.left, p.rect.bottom = 300, 400
+        l.add(p)
+
+        # Make an obstacle
+        p = ObstacleBox()
+        p.rect.left, p.rect.bottom = 500, 30
+        l.add(p)
+
+        p = ObstacleBox()
+        p.rect.left, p.rect.bottom = 928, 30
+        l.add(p)
+
+        p = ObstacleBox()
+        p.rect.left, p.rect.bottom = 1050, 30
+        l.add(p)
+
+        p = ObstacleBox()
+        p.rect.left, p.rect.bottom = 928, 400
         l.add(p)
 
         window = cocos.director.director.get_window_size()
