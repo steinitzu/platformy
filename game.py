@@ -135,6 +135,8 @@ class Player(CollidableSprite):
         self.left_image = self.left_image or image
         self.right_image = self.right_image or image
 
+        self.floors_enabled = True
+
         # Maximum walk speed
         self.walk_speed = kwargs.get('walk_speed', 5000)
         self.walk_velocity_cap = kwargs.get('walk_velocity_cap', 1000)
@@ -207,6 +209,12 @@ class Player(CollidableSprite):
     def move_down(self):
         self._set_y_accel(-self.jump_strength)
 
+    def move_down_through_platform(self):
+        if self.can_jump:
+            self._set_y_velocity(-1)
+            self.floors_enabled = False
+            self.can_jump = False
+
     def reset_move(self):
         pass
 
@@ -225,20 +233,18 @@ class Player(CollidableSprite):
             if not isinstance(ob, Platform):
                 continue
             if ob.is_wall:
-                wallcrash = False
                 if self.velocity[0] > 0:
                     # moving right
                     self.set_rect('right', ob.rect.left)
-                    wallcrash = True
                     self._set_x_velocity(-self.velocity[0])
                     self._set_x_accel(-self.walk_speed)
                 elif self.velocity[0] < 0:
                     self.set_rect('left', ob.rect.right)
-                    wallcrash = True
                     self._set_x_velocity(abs(self.velocity[0]))
                     self._set_x_accel(self.walk_speed)
-
-            if self.old_bottom >= ob.rect.top and self.velocity[1] < 0:
+            if ((self.floors_enabled or not ob.can_traverse_down)
+                and self.old_bottom >= ob.rect.top
+                and self.velocity[1] < 0):
                 self.set_rect('bottom', ob.rect.top)
                 self._set_y_accel(0)
                 self._set_y_velocity(0)
@@ -252,6 +258,15 @@ class Player(CollidableSprite):
                   self.velocity, self.acceleration)
         if not self.walking:
             self.stop_walk()
+        # Enable floors again after movement is done
+        # so we won't keep falling through
+        self.floors_enabled = True
+
+
+class AIPlayer(Player):
+
+    def __init__(self, *args, **kwargs):
+        super(AIPlayer, self).__init__(*args, **kwargs)
 
 
 class BallMan(Player):
@@ -263,6 +278,18 @@ class BallMan(Player):
                                       *args, width_multi=0.6, height_multi=0.8,
                                       **kwargs)
 
+    def ranged_attack(self, target):
+        bullet = CollidableSprite
+
+
+class Bullet(CollidableSprite):
+
+    def __init__(self, *args, **kwargs):
+        image = pyglet.resource.image('bullet8x8.png')
+        self.player = kwargs['player']
+        super(Bullet, self).__init__(image, *args,
+                                     width_multi=1, height_multi=1,
+                                     **kwargs)
 
 class Platform(CollidableSprite):
 
@@ -285,7 +312,6 @@ class Wall(Platform):
         super(Wall, self).__init__('wall.png')
         self.is_wall = True
         self.is_walkable = False
-
 
 
 class Level(layer.Layer):
@@ -320,19 +346,24 @@ class Level(layer.Layer):
 
     def update(self, *args, **kwargs):
         p = self.get('player')
-        if keycode.LEFT in self.keys_pressed:
+        pressed = self.keys_pressed
+        left = {keycode.A, keycode.LEFT}
+        right = {keycode.D, keycode.RIGHT}
+        jump = {keycode.SPACE, keycode.W, keycode.UP}
+        down = {keycode.DOWN, keycode.S}
+
+        if left.intersection(pressed):
             p.walk_left()
-        if keycode.RIGHT in self.keys_pressed:
+        elif right.intersection(pressed):
             p.walk_right()
-        if (keycode.RIGHT not in self.keys_pressed
-            and keycode.LEFT not in self.keys_pressed):
+        else:
             p.stop_walk()
-        if keycode.SPACE not in self.keys_pressed:
-            p.end_jump()
-        if keycode.SPACE in self.keys_pressed:
+        if len(jump.union(down).intersection(pressed)) >= 2:
+            p.move_down_through_platform()
+        elif jump.intersection(pressed):
             p.jump()
-        if keycode.DOWN in self.keys_pressed:
-            p.move_down()
+        else:
+            p.end_jump()
 
 
 class Level0(Level):
