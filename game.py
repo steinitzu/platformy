@@ -1,6 +1,7 @@
 import os
 import random
 import logging
+import math
 
 from webcolors import name_to_rgb as rgb
 import cocos
@@ -108,7 +109,9 @@ class SteiniMove(actions.Action):
             log.debug('Gravity: %s, fall_time: %s', gravity, self.fall_time)
             self.fall_time += dt
         dx += ddx * dt
-        dy += (ddy + gravity) * dt
+        dy += gravity
+        #dy = ddy + gravity
+        #dy += (ddy + gravity) * dt
         self.target.velocity = (dx, dy)
         x += dx * dt
         y += dy * dt
@@ -131,15 +134,15 @@ class Player(CollidableSprite):
         super(Player, self).__init__(image, *args, **kwargs)
         self.left_image = self.left_image or image
         self.right_image = self.right_image or image
+
         # Maximum walk speed
-        self.walk_speed = kwargs.get('walk_speed', 3000)
+        self.walk_speed = kwargs.get('walk_speed', 5000)
         self.walk_velocity_cap = kwargs.get('walk_velocity_cap', 1000)
         # Maximum jump strength
-        self.jump_strength = kwargs.get('jump_strength', 5000)
-
+        self.jump_strength = kwargs.get('jump_strength', 1200)
         self.velocity = (0, 0)
         self.acceleration = (0, 0)
-        self.gravity = -20000
+        self.gravity = -400
         self.walking = False
 
         self.move_action = SteiniMove()
@@ -194,7 +197,8 @@ class Player(CollidableSprite):
 
     def jump(self):
         if self.velocity[1] == 0:
-            self._set_y_accel(self.jump_strength)
+            self._set_y_velocity(self.jump_strength)
+            #self._set_y_accel(self.jump_strength)
 
     def end_jump(self):
         self._set_y_accel(0)
@@ -226,12 +230,12 @@ class Player(CollidableSprite):
                     # moving right
                     self.set_rect('right', ob.rect.left)
                     wallcrash = True
-                    self._set_x_velocity(-500)
+                    self._set_x_velocity(-self.velocity[0])
                     self._set_x_accel(-self.walk_speed)
                 elif self.velocity[0] < 0:
                     self.set_rect('left', ob.rect.right)
                     wallcrash = True
-                    self._set_x_velocity(500)
+                    self._set_x_velocity(abs(self.velocity[0]))
                     self._set_x_accel(self.walk_speed)
 
             if self.old_bottom >= ob.rect.top and self.velocity[1] < 0:
@@ -357,7 +361,7 @@ class Level0(Level):
         p.rect.left, p.rect.bottom = 200, 160
         l.add(p)
         p = GreyPlatform()
-        p.rect.left, p.rect.bottom = 600, 160
+        p.rect.left, p.rect.top = 600, 200
         l.add(p)
         p = GreyPlatform()
         p.rect.left, p.rect.bottom = 400, 400

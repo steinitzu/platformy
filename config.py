@@ -1,7 +1,7 @@
 import logging
 import logging.handlers
 
-LOG_LEVEL = logging.WARNING
+LOG_LEVEL = logging.DEBUG
 def init_log():
     log = logging.getLogger('Ballmonster')
     hdlr = logging.StreamHandler()
