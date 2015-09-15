@@ -4,21 +4,21 @@ import logging
 
 from webcolors import name_to_rgb as rgb
 import cocos
-from cocos import sprite, layer, actions, collision_model, draw, euclid
+from cocos import sprite, layer, actions, collision_model
 
-from cocos.actions import Reverse, Repeat, ScaleBy, Rotate
 import pyglet
 from pyglet.window import key as keycode
 
-from primitives import Circle, Rect
+from primitives import Circle
 import config
 
 # Have to do this apparently, otherwise resources aren't found?
 pyglet.resource.path = [os.path.join(os.path.realpath(''), 'resources')]
 pyglet.resource.reindex()
 
+config.init_log()
 log = logging.getLogger('Ballmonster')
-#log.setLevel(config.LOG_LEVEL)
+
 
 def rgba(name, alpha=255):
     return rgb(name) + (alpha,)
@@ -38,7 +38,7 @@ class CollidableSprite(sprite.Sprite):
         self.schedule(self.update)
 
         print log.level
-        if log.level == logging.WARNING:
+        if log.level == logging.DEBUG:
             print 'doing debug'
             r,g,b,a = rgba('yellow', 100)
             c = layer.ColorLayer(r,g,b,a,
@@ -132,7 +132,7 @@ class Player(CollidableSprite):
         self.left_image = self.left_image or image
         self.right_image = self.right_image or image
         # Maximum walk speed
-        self.walk_speed = kwargs.get('walk_speed', 1200)
+        self.walk_speed = kwargs.get('walk_speed', 3000)
         self.walk_velocity_cap = kwargs.get('walk_velocity_cap', 1000)
         # Maximum jump strength
         self.jump_strength = kwargs.get('jump_strength', 5000)
@@ -193,7 +193,7 @@ class Player(CollidableSprite):
             self.acceleration = -self.walk_speed, self.acceleration[1]
 
     def jump(self):
-        if self.velocity[1] >= 0:
+        if self.velocity[1] == 0:
             self._set_y_accel(self.jump_strength)
 
     def end_jump(self):
@@ -227,12 +227,12 @@ class Player(CollidableSprite):
                     self.set_rect('right', ob.rect.left)
                     wallcrash = True
                     self._set_x_velocity(-500)
+                    self._set_x_accel(-self.walk_speed)
                 elif self.velocity[0] < 0:
                     self.set_rect('left', ob.rect.right)
                     wallcrash = True
                     self._set_x_velocity(500)
-                if wallcrash:
-                    self._set_x_accel(0)
+                    self._set_x_accel(self.walk_speed)
 
             if self.old_bottom >= ob.rect.top and self.velocity[1] < 0:
                 self.set_rect('bottom', ob.rect.top)
@@ -268,6 +268,7 @@ class Platform(CollidableSprite):
                                        height_multi=1)
         self.can_traverse_down = True
         self.is_wall = False
+        self.is_walkable = True
 
 
 class GreyPlatform(Platform):
@@ -279,6 +280,8 @@ class Wall(Platform):
     def __init__(self):
         super(Wall, self).__init__('wall.png')
         self.is_wall = True
+        self.is_walkable = False
+
 
 
 class Level(layer.Layer):
@@ -332,9 +335,14 @@ class Level0(Level):
     def __init__(self, player):
         super(Level0, self).__init__(player)
         # Place player on a random platform
-        platform = random.choice(self.get('platforms_layer').get_children())
+        platform = None
+        while True:
+            platform = random.choice(
+                self.get('platforms_layer').get_children())
+            if not platform.is_wall:
+                break
         player.set_rect('bottom', platform.rect.top)
-        player.set_rect('left', platform.rect.left)
+        player.set_rect('left', platform.rect.left+20)
 
     def build_platforms(self):
         x_pos = 0
@@ -377,6 +385,12 @@ cocos.director.director.init(width=1280, height=720,
                              caption='Ballmonster',
                              autoscale=True, resizable=True,
                              fullscreen=False)
+
+
+#cocos.director.director.fps_display = pyglet.clock.ClockDisplay(color=rgba('blue'))
+cocos.director.director.show_FPS = True
+
+#cocos.director.director.fps_display.color = rgba('blue')
 level0 = Level0(BallMan())
 main_scene = cocos.scene.Scene(level0)
 
