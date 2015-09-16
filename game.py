@@ -216,21 +216,15 @@ class Player(CollidableSprite):
         self.floors_enabled = True
 
         # Maximum walk speed
-        self.walk_speed = kwargs.get('walk_speed', 2000)
+        self.walk_acceleration = kwargs.get('walk_acceleration', 2000)
         # Maximum jump strength
-        self.jump_strength = kwargs.get('jump_strength', 1200)
+        self.jump_strength = kwargs.get('jump_strength', 1000)
 
-        self.velocity_cap = kwargs.get('velocity_cap', [2000, 0])
+        self.velocity_cap = kwargs.get('velocity_cap', [1000, 0])
         self.velocity = [0, 0]
         self.acceleration = [0, 0]
         self.gravity = -20000
         self.walking = False
-
-        #self.move_action = PlatformMove(cm=self.parent.cm)
-        #self.do(self.move_action)
-        self.old_bottom = self.rect.bottom
-        self.old_left = self.rect.left
-        self.old_right = self.rect.right
 
         self.cm = None
 
@@ -248,21 +242,25 @@ class Player(CollidableSprite):
 
     def walk_left(self, accel_mod=None):
         self.image = self.left_image
-        accel = accel_mod*self.walk_speed or -self.walk_speed
+        accel_mod = accel_mod or -1
+        accel = accel_mod*self.walk_acceleration
         if self.velocity[0] > 0:
             # Is currently walking right
-            accel -= 6000
+            # Help slow down
+            accel -= 1000
         self.walking = True
+        self.acceleration[0] = accel
         self._set_x_accel(accel)
 
     def walk_right(self, accel_mod=None):
         self.image = self.right_image
-        accel = accel_mod*self.walk_speed or self.walk_speed
+        accel_mod = accel_mod or 1
+        accel = accel_mod*self.walk_acceleration
         if self.velocity[0] < 0:
             # Is currently walking left
-            accel += 6000
+            accel += 1000
         self.walking = True
-        self._set_x_accel(accel)
+        self.acceleration[0] = accel
 
     def stop_walk(self):
         """
@@ -281,13 +279,13 @@ class Player(CollidableSprite):
             self.acceleration[0] = -4000
 
     def jump(self):
-        if self.velocity[1] == 0:
-            #self.acceleration[1] = self.jump_strength
-            self.velocity[1] = self.jump_strength
-            #self._set_y_velocity(self.jump_strength)
-            #self._set_y_accel(self.jump_strength)
+        if self.velocity >= 0:
+            # Can't jump if already falling
+            self.velocity[1] += 95
 
     def end_jump(self):
+        return
+        # TODO erase this method
         self._set_y_accel(0)
         self.can_jump = True
 
@@ -295,10 +293,8 @@ class Player(CollidableSprite):
         self._set_y_accel(-self.jump_strength)
 
     def move_down_through_platform(self):
-        if self.can_jump:
-            self._set_y_velocity(-1)
-            self.floors_enabled = False
-            self.can_jump = False
+        self._set_y_velocity(-1)
+        self.floors_enabled = False
 
     def reset_move(self):
         pass
@@ -310,49 +306,6 @@ class Player(CollidableSprite):
                      and self.rect.left < platform.rect.right)):
                 return True
         return False
-
-    def stop_on_platform(self):
-        # if self.velocity[1] >= 0:
-        #     return
-        for ob in self.parent.cm.objs_colliding(self):
-            if not isinstance(ob, Platform):
-                continue
-            if ((self.floors_enabled or not ob.can_traverse_down)
-                and self.old_bottom >= ob.rect.top and ob.is_walkable
-                and self.velocity[1] < 0):
-                self.set_rect('bottom', ob.rect.top)
-                self._set_y_accel(0)
-                self._set_y_velocity(0)
-                return
-            if ob.is_wall:
-                # Only do X collisions if
-                # player is partially outside of x-bounds
-                # of box.
-                # This is to make sure that player can jump into the
-                # bottom of the box without being cast to the side of it.
-                # Same with Y collisions, only if bottom of the player is
-                # outside the box
-                if (self.velocity[0] > 0
-                    and self.rect.right > ob.rect.left
-                    and self.rect.left < ob.rect.left):
-                    # moving right
-                    self.set_rect('right', ob.rect.left)
-                    self._set_x_velocity(self.velocity[0]*-0.5)
-                    self._set_x_accel(-self.walk_speed)
-                elif (self.velocity[0] < 0
-                      and self.rect.left < ob.rect.right
-                      and self.rect.right > ob.rect.right):
-                    # moving left
-                    self.set_rect('left', ob.rect.right)
-                    self._set_x_velocity(self.velocity[0]*-0.5)
-                    self._set_x_accel(self.walk_speed)
-                if (self.velocity[1] > 0
-                    and self.rect.top > ob.rect.bottom
-                    and self.rect.bottom < ob.rect.bottom):
-                    # Moving up
-                    self.set_rect('top', ob.rect.bottom)
-                    self._set_y_velocity(-self.velocity[1])
-
 
     # Attack stuff
     def ranged_attack(self, target):
@@ -371,14 +324,6 @@ class Player(CollidableSprite):
         # Enable floors again after movement is done
         # so we won't keep falling through
         self.floors_enabled = True
-        # if abs(self.velocity[0]) > self.walk_velocity_cap:
-        #     xvel = self.velocity[0]
-        #     if xvel > 0:
-        #         newvel = self.walk_velocity_cap
-        #     else:
-        #         newvel = -self.walk_velocity_cap
-        #     self._set_x_velocity(newvel)
-
 
 class AIPlayer(Player):
 
@@ -389,8 +334,8 @@ class AIPlayer(Player):
 class BallMan(Player):
 
     def __init__(self, *args, **kwargs):
-        self.right_image = pyglet.resource.image('ballman96x96.png')
-        self.left_image = pyglet.resource.image('ballman96x96left.png')
+        self.right_image = pyglet.resource.image('ballman72x72.png')
+        self.left_image = pyglet.resource.image('ballman72x72left.png')
         super(BallMan, self).__init__(self.right_image,
                                       *args, width_multi=0.6, height_multi=0.8,
                                       **kwargs)
