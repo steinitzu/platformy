@@ -13,6 +13,7 @@ from pyglet.window import key as keycode
 from primitives import Circle
 from util import distance
 import config
+from gamepads import dualshock4
 
 # Have to do this apparently, otherwise resources aren't found?
 pyglet.resource.path = [os.path.join(os.path.realpath(''), 'resources')]
@@ -56,7 +57,8 @@ class CollidableSprite(sprite.Sprite):
     def update(self, *args, **kwargs):
 
         if self.are_actions_running():
-            self.rect.center = self.position
+            pass
+            #self.rect.center = self.position
         else:
             self.position = self.rect.center
         self.cshape.center = self.position
@@ -67,6 +69,7 @@ class CollidableSprite(sprite.Sprite):
         """
         self.rect.__setattr__(attr, value)
         self.position = self.rect.center
+        self.cshape.center = self.position
 
     def draw(self):
         super(CollidableSprite, self).draw()
@@ -128,6 +131,80 @@ class SteiniMove(actions.Action):
         if dr:
             self.target.rotation += dr * dt
 
+class PlatformMove(actions.Action):
+    """
+    Move and check for collisions in the environment.
+    Target should have a cm (collisionmanager) attribute
+    """
+    def init(self, *args, **kwargs):
+        self.fall_time = 0.0
+
+    def step(self, dt):
+        target = self.target
+        x, y = target.position
+        vx, vy = target.velocity
+        vxc, vyc = target.velocity_cap
+        ax, ay = target.acceleration
+
+        # Acceleration per frame added to velocity
+        vx += ax * dt
+        vy += ay * dt
+        if vxc and abs(vx) > vxc:
+            if vx > 0:
+                vx = vxc
+            elif vx < 0:
+                vx = -vxc
+        if vyc and abs(vy) > vyc:
+            if vy > 0:
+                vy = vyc
+            elif vy < 0:
+                vy = -vyc
+        target.velocity = [vx, vy]
+        # Start moving on X axis, then check for collisions
+        old_x = target.x
+        target.set_rect('left', target.rect.left+(vx*dt))
+
+        log.debug('Target position: %s', target.position)
+        log.debug('Target.rect center: %s', target.rect.center)
+        log.debug('Target cshape pos: %s', target.cshape.center)
+        for ob in target.cm.objs_colliding(target):
+            if not isinstance(ob, Platform):
+                continue
+            if ob.is_wall:
+                if vx > 0:
+                    target.set_rect('right', ob.rect.left)
+                    target.velocity[0] = 0
+                    target.acceleration[0] = 0
+                elif vx < 0:
+                    target.set_rect('left', ob.rect.right)
+                    target.velocity[0] = 0
+                    target.acceleration[0] = 0
+        # target.y += vy * dt
+        old_bottom = target.rect.bottom
+        old_top = target.rect.top
+        target.set_rect('top', target.rect.top+(vy*dt))
+        collides = False
+        for ob in target.cm.objs_colliding(target):
+            if not isinstance(ob, Platform):
+                continue
+            if ((target.floors_enabled or not ob.can_traverse_down)
+                 and vy < 0 and old_bottom >= ob.rect.top):
+                target.set_rect('bottom', ob.rect.top)
+                target.velocity[1] = 0
+                target.acceleration[1] = 0
+                collides = True
+            elif (ob.is_wall and vy > 0 and old_top <= ob.rect.bottom):
+                target.set_rect('top', ob.rect.bottom)
+                target.velocity[1] = 0
+                target.acceleration[1] = 0
+        if collides:
+            gravity = 0
+            self.fall_time = 0.0
+        else:
+            gravity = target.gravity
+            self.fall_time += dt
+            target.velocity[1] += (gravity*dt)*self.fall_time
+            #target.velocity[1] += (gravity * self.fall_time * dt)
 
 class Player(CollidableSprite):
 
@@ -139,68 +216,75 @@ class Player(CollidableSprite):
         self.floors_enabled = True
 
         # Maximum walk speed
-        self.walk_speed = kwargs.get('walk_speed', 3000)
-        self.walk_velocity_cap = kwargs.get('walk_velocity_cap', 2000)
+        self.walk_speed = kwargs.get('walk_speed', 2000)
         # Maximum jump strength
         self.jump_strength = kwargs.get('jump_strength', 1200)
-        self.velocity = (0, 0)
-        self.acceleration = (0, 0)
-        self.gravity = -400
+
+        self.velocity_cap = kwargs.get('velocity_cap', [2000, 0])
+        self.velocity = [0, 0]
+        self.acceleration = [0, 0]
+        self.gravity = -20000
         self.walking = False
 
-        self.move_action = SteiniMove()
-        self.do(self.move_action)
+        #self.move_action = PlatformMove(cm=self.parent.cm)
+        #self.do(self.move_action)
         self.old_bottom = self.rect.bottom
         self.old_left = self.rect.left
         self.old_right = self.rect.right
 
+        self.cm = None
+
     def _set_x_accel(self, value):
-        self.acceleration = value, self.acceleration[1]
+        self.acceleration[0] = value
 
     def _set_y_accel(self, value):
-        self.acceleration = self.acceleration[0], value
+        self.acceleration[1] = value
 
     def _set_x_velocity(self, value):
-        self.velocity = value, self.velocity[1]
+        self.velocity[0] = value
 
     def _set_y_velocity(self, value):
-        self.velocity = self.velocity[0], value
+        self.velocity[1] = value
 
-    def walk_left(self):
+    def walk_left(self, accel_mod=None):
         self.image = self.left_image
-        log.debug(self.image)
+        accel = accel_mod*self.walk_speed or -self.walk_speed
+        if self.velocity[0] > 0:
+            # Is currently walking right
+            accel -= 6000
         self.walking = True
-        if self.velocity[0] <= -self.walk_velocity_cap:
-            self._set_x_accel(0)
-        else:
-            self.acceleration = -self.walk_speed, self.acceleration[1]
+        self._set_x_accel(accel)
 
-    def walk_right(self):
+    def walk_right(self, accel_mod=None):
         self.image = self.right_image
-        log.debug(self.image)
+        accel = accel_mod*self.walk_speed or self.walk_speed
+        if self.velocity[0] < 0:
+            # Is currently walking left
+            accel += 6000
         self.walking = True
-        if self.velocity[0] >= self.walk_velocity_cap:
-            self._set_x_accel(0)
-        else:
-            self.acceleration = self.walk_speed, self.acceleration[1]
+        self._set_x_accel(accel)
 
     def stop_walk(self):
         """
         Decellerate to stop position.
         """
         self.walking = False
-        if -1 <= self.velocity[0] <= 1:
-            self.acceleration = 0, self.acceleration[1]
-            self.velocity = 0, self.velocity[1]
+        if -5 <= self.velocity[0] <= 5:
+            self.acceleration[0] = 0
+            self.velocity[0] = 0
             return
+        #self._set_x_velocity(-self.velocity[0]/2)
+        #return
         if self.velocity[0] < 0:
-            self.acceleration = self.walk_speed, self.acceleration[1]
+            self.acceleration[0] = 4000
         elif self.velocity[0] > 0:
-            self.acceleration = -self.walk_speed, self.acceleration[1]
+            self.acceleration[0] = -4000
 
     def jump(self):
         if self.velocity[1] == 0:
-            self._set_y_velocity(self.jump_strength)
+            #self.acceleration[1] = self.jump_strength
+            self.velocity[1] = self.jump_strength
+            #self._set_y_velocity(self.jump_strength)
             #self._set_y_accel(self.jump_strength)
 
     def end_jump(self):
@@ -253,14 +337,14 @@ class Player(CollidableSprite):
                     and self.rect.left < ob.rect.left):
                     # moving right
                     self.set_rect('right', ob.rect.left)
-                    self._set_x_velocity(self.velocity[0]*-0.8)
+                    self._set_x_velocity(self.velocity[0]*-0.5)
                     self._set_x_accel(-self.walk_speed)
                 elif (self.velocity[0] < 0
                       and self.rect.left < ob.rect.right
                       and self.rect.right > ob.rect.right):
                     # moving left
                     self.set_rect('left', ob.rect.right)
-                    self._set_x_velocity(self.velocity[0]*-0.8)
+                    self._set_x_velocity(self.velocity[0]*-0.5)
                     self._set_x_accel(self.walk_speed)
                 if (self.velocity[1] > 0
                     and self.rect.top > ob.rect.bottom
@@ -279,7 +363,7 @@ class Player(CollidableSprite):
     def update(self, *args, **kwargs):
 
         super(Player, self).update(*args, **kwargs)
-        self.stop_on_platform()
+        #self.stop_on_platform()
         log.debug('Velocity: %s, Acceleration: %s',
                   self.velocity, self.acceleration)
         if not self.walking:
@@ -287,13 +371,13 @@ class Player(CollidableSprite):
         # Enable floors again after movement is done
         # so we won't keep falling through
         self.floors_enabled = True
-        if abs(self.velocity[0]) > self.walk_velocity_cap:
-            xvel = self.velocity[0]
-            if xvel > 0:
-                newvel = self.walk_velocity_cap
-            else:
-                newvel = -self.walk_velocity_cap
-            self._set_x_velocity(newvel)
+        # if abs(self.velocity[0]) > self.walk_velocity_cap:
+        #     xvel = self.velocity[0]
+        #     if xvel > 0:
+        #         newvel = self.walk_velocity_cap
+        #     else:
+        #         newvel = -self.walk_velocity_cap
+        #     self._set_x_velocity(newvel)
 
 
 class AIPlayer(Player):
@@ -305,8 +389,8 @@ class AIPlayer(Player):
 class BallMan(Player):
 
     def __init__(self, *args, **kwargs):
-        self.right_image = pyglet.resource.image('ballman128x128.png')
-        self.left_image = pyglet.resource.image('ballman128x128left.png')
+        self.right_image = pyglet.resource.image('ballman96x96.png')
+        self.left_image = pyglet.resource.image('ballman96x96left.png')
         super(BallMan, self).__init__(self.right_image,
                                       *args, width_multi=0.6, height_multi=0.8,
                                       **kwargs)
@@ -398,11 +482,24 @@ class Level(layer.Layer):
         self.cm.add(player)
         for p in self.get('platforms_layer').get_children():
             self.cm.add(p)
+        player.cm = self.cm
 
         self.schedule(self.update)
         self.is_event_handler = True
         self.keys_pressed = set()
         self.add(MouseDisplay(), name='mouse_display', z=3)
+
+        # Joysticks
+        log.info('Joysticks: %s', pyglet.input.get_joysticks())
+        self.joysticks = pyglet.input.get_joysticks()
+        for j in self.joysticks:
+            log.info('Opening joystick: %s', j)
+            j.open()
+            j.set_handler('on_joybutton_press', self.on_joybutton_press)
+            j.set_handler('on_joybutton_release', self.on_joybutton_release)
+            j.set_handler('on_joyaxis_motion', self.on_joyaxis_motion)
+
+        self.joy_player = {j: player,}
 
     def build_platforms():
         return layer.Layer()
@@ -420,6 +517,42 @@ class Level(layer.Layer):
         p = self.get('player')
         p.ranged_attack((x, y))
 
+    def on_joybutton_press(self, joystick, button):
+        log.info('Joystick: %s, button pressed: %s', joystick, button)
+
+    def on_joybutton_release(self, joystick, button):
+        log.info('Joystick: %s, button released: %s', joystick, button)
+
+    def on_joyaxis_motion(self, joystick, axis, value):
+        pass
+        #log.info('Joystick: %s, axis change: %s', joystick, (axis, value))
+
+
+    def do_motions(self, joystick):
+        p = self.joy_player[joystick]
+        x = joystick.x
+        y = joystick.y
+        deadzone = 0.5
+        down = y > deadzone
+
+
+        pressed = joystick.buttons
+        ds = dualshock4
+        if pressed[ds['x']] and down:
+            p.move_down_through_platform()
+        elif pressed[ds['x']]:
+            p.jump()
+        else:
+            p.end_jump()
+
+        if abs(x) <= deadzone:
+            p.stop_walk()
+        elif x < 0:
+            p.walk_left(x)
+        else:
+            p.walk_right(x)
+
+
     def update(self, *args, **kwargs):
         p = self.get('player')
         pressed = self.keys_pressed
@@ -427,19 +560,22 @@ class Level(layer.Layer):
         right = {keycode.D, keycode.RIGHT}
         jump = {keycode.SPACE, keycode.W, keycode.UP}
         down = {keycode.DOWN, keycode.S}
+        for joystick in self.joy_player.keys():
+            self.do_motions(joystick)
 
-        if left.intersection(pressed):
-            p.walk_left()
-        elif right.intersection(pressed):
-            p.walk_right()
-        else:
-            p.stop_walk()
-        if len(jump.union(down).intersection(pressed)) >= 2:
-            p.move_down_through_platform()
-        elif jump.intersection(pressed):
-            p.jump()
-        else:
-            p.end_jump()
+
+        # if left.intersection(pressed):
+        #     p.walk_left()
+        # elif right.intersection(pressed):
+        #     p.walk_right()
+        # else:
+        #     p.stop_walk()
+        # if len(jump.union(down).intersection(pressed)) >= 2:
+        #     p.move_down_through_platform()
+        # elif jump.intersection(pressed):
+        #     p.jump()
+        # else:
+        #     p.end_jump()
 
 
 class Level0(Level):
@@ -454,6 +590,8 @@ class Level0(Level):
                 break
         player.set_rect('bottom', platform.rect.top)
         player.set_rect('left', platform.rect.left+20)
+        m = PlatformMove(cm=self.cm)
+        player.do(m)
 
     def build_platforms(self):
         x_pos = 0
