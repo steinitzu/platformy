@@ -293,8 +293,9 @@ class Player(CollidableSprite):
         self._set_y_accel(-self.jump_strength)
 
     def move_down_through_platform(self):
-        self._set_y_velocity(-1)
-        self.floors_enabled = False
+        if self.velocity[1] == 0:
+            self._set_y_velocity(-1)
+            self.floors_enabled = False
 
     def reset_move(self):
         pass
@@ -444,7 +445,11 @@ class Level(layer.Layer):
             j.set_handler('on_joybutton_release', self.on_joybutton_release)
             j.set_handler('on_joyaxis_motion', self.on_joyaxis_motion)
 
-        self.joy_player = {j: player,}
+        if self.joysticks:
+            self.joystick_player = {self.joysticks[0]: player}
+            self.key_handler = self.joystick_handler
+        else:
+            self.key_handler = self.keyboard_handler
 
     def build_platforms():
         return layer.Layer()
@@ -473,13 +478,13 @@ class Level(layer.Layer):
         #log.info('Joystick: %s, axis change: %s', joystick, (axis, value))
 
 
-    def do_motions(self, joystick):
-        p = self.joy_player[joystick]
+    def joystick_handler(self):
+        joystick = self.joysticks[0]
+        p = self.get('player')
         x = joystick.x
         y = joystick.y
         deadzone = 0.5
         down = y > deadzone
-
 
         pressed = joystick.buttons
         ds = dualshock4
@@ -497,31 +502,29 @@ class Level(layer.Layer):
         else:
             p.walk_right(x)
 
-
-    def update(self, *args, **kwargs):
+    def keyboard_handler(self):
         p = self.get('player')
         pressed = self.keys_pressed
         left = {keycode.A, keycode.LEFT}
         right = {keycode.D, keycode.RIGHT}
         jump = {keycode.SPACE, keycode.W, keycode.UP}
         down = {keycode.DOWN, keycode.S}
-        for joystick in self.joy_player.keys():
-            self.do_motions(joystick)
 
+        if left.intersection(pressed):
+            p.walk_left()
+        elif right.intersection(pressed):
+            p.walk_right()
+        else:
+            p.stop_walk()
+        if len(jump.union(down).intersection(pressed)) >= 2:
+            p.move_down_through_platform()
+        elif jump.intersection(pressed):
+            p.jump()
+        else:
+            p.end_jump()
 
-        # if left.intersection(pressed):
-        #     p.walk_left()
-        # elif right.intersection(pressed):
-        #     p.walk_right()
-        # else:
-        #     p.stop_walk()
-        # if len(jump.union(down).intersection(pressed)) >= 2:
-        #     p.move_down_through_platform()
-        # elif jump.intersection(pressed):
-        #     p.jump()
-        # else:
-        #     p.end_jump()
-
+    def update(self, *args, **kwargs):
+        self.key_handler()
 
 class Level0(Level):
     def __init__(self, player):
