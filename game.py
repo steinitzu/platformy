@@ -256,6 +256,16 @@ class Player(CollidableSprite):
             self.image = self.right_image
             self.direction = 1
 
+    def walk(self, accel_mod=1):
+        accel = accel_mod*self.walk_acceleration
+        self.velocity_cap[0] = abs(accel_mod)*self._base_velocity_cap[0]
+        self.turn(accel_mod)
+        if self.velocity[0] * accel < 0:
+            # Is switching directions
+            accel += accel_mod*1400
+        self.walking = True
+        self.acceleration[0] = accel
+
     def walk_left(self, accel_mod=None):
         accel_mod = accel_mod or -1
         self.turn(accel_mod)
@@ -267,7 +277,6 @@ class Player(CollidableSprite):
             accel -= 1000
         self.walking = True
         self.acceleration[0] = accel
-        self._set_x_accel(accel)
 
     def walk_right(self, accel_mod=None):
         accel_mod = accel_mod or 1
@@ -521,12 +530,10 @@ class Level(layer.Layer):
             p.jump()
         else:
             p.end_jump()
-        if abs(x) <= deadzone:
+        if abs(x) < deadzone:
             p.stop_walk()
-        elif x < 0:
-            p.walk_left(x)
         else:
-            p.walk_right(x)
+            p.walk(x)
         if pressed[ds['circle']]:
             log.info('Joystick: X axis: %s, Y axis: %s', x, y)
             if abs(x) > deadzone or abs(y) > deadzone:
@@ -535,8 +542,6 @@ class Level(layer.Layer):
             else:
                 x = p.direction
                 y = 0
-            # offset = (x if abs(x) > deadzone or abs(y) > deadzone else p.direction,
-            #           y*-1 if abs(y) > deadzone or abs(x) > deadzone else 0)
             p.ranged_attack(offset=(x,y))
             p.stop_walk()
 
