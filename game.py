@@ -228,6 +228,9 @@ class Player(CollidableSprite):
 
         self.cm = None
 
+        # X direction either 1 or -1
+        self.direction = 1
+
     def _set_x_accel(self, value):
         self.acceleration[0] = value
 
@@ -240,9 +243,20 @@ class Player(CollidableSprite):
     def _set_y_velocity(self, value):
         self.velocity[1] = value
 
+    def turn(self, direction):
+        if direction > 0:
+            self.image = self.right_image
+            self.direction = direction
+        elif direction < 0:
+            self.image = self.left_image
+            self.direction = direction
+        else:
+            self.image = self.right_image
+            self.direction = 1
+
     def walk_left(self, accel_mod=None):
-        self.image = self.left_image
         accel_mod = accel_mod or -1
+        self.turn(accel_mod)
         accel = accel_mod*self.walk_acceleration
         if self.velocity[0] > 0:
             # Is currently walking right
@@ -253,8 +267,8 @@ class Player(CollidableSprite):
         self._set_x_accel(accel)
 
     def walk_right(self, accel_mod=None):
-        self.image = self.right_image
         accel_mod = accel_mod or 1
+        self.turn(accel_mod)
         accel = accel_mod*self.walk_acceleration
         if self.velocity[0] < 0:
             # Is currently walking left
@@ -309,10 +323,23 @@ class Player(CollidableSprite):
         return False
 
     # Attack stuff
-    def ranged_attack(self, target):
+    def ranged_attack(self, offset=(1, 1)):
+        """
+        Give axis offset, x, y.
+        """
+        # TODO: Make range an attribute for attack class
+        arange = 500
         bullet = Bullet(player=self)
         bullet.position = self.position
-        bullet.go(target)
+        log.info('Ranged attack: player.pos:%s, offset: %s',
+                 self.position, offset)
+        degrees = math.atan2(offset[1], offset[0])*180/math.pi
+        rads = degrees * (math.pi/180)
+        endpoint = (self.x+math.cos(rads)*arange,
+                    self.y+math.sin(rads)*arange)
+        log.info('Ranged attack: degrees: %s, rads: %s, endpoint: %s',
+                 degrees, rads, endpoint)
+        bullet.go(endpoint)
 
     def update(self, *args, **kwargs):
 
@@ -340,9 +367,6 @@ class BallMan(Player):
         super(BallMan, self).__init__(self.right_image,
                                       *args, width_multi=0.6, height_multi=0.8,
                                       **kwargs)
-
-
-
 
 class Bullet(CollidableSprite):
 
@@ -468,60 +492,84 @@ class Level(layer.Layer):
         p.ranged_attack((x, y))
 
     def on_joybutton_press(self, joystick, button):
-        log.info('Joystick: %s, button pressed: %s', joystick, button)
+        pass
 
     def on_joybutton_release(self, joystick, button):
-        log.info('Joystick: %s, button released: %s', joystick, button)
+        pass
 
     def on_joyaxis_motion(self, joystick, axis, value):
         pass
-        #log.info('Joystick: %s, axis change: %s', joystick, (axis, value))
-
 
     def joystick_handler(self):
         joystick = self.joysticks[0]
         p = self.get('player')
         x = joystick.x
         y = joystick.y
-        deadzone = 0.5
+        deadzone = 0.4
         down = y > deadzone
 
         pressed = joystick.buttons
         ds = dualshock4
+
         if pressed[ds['x']] and down:
             p.move_down_through_platform()
         elif pressed[ds['x']]:
             p.jump()
         else:
             p.end_jump()
-
         if abs(x) <= deadzone:
             p.stop_walk()
         elif x < 0:
             p.walk_left(x)
         else:
             p.walk_right(x)
+        if pressed[ds['circle']]:
+            log.info('Joystick: X axis: %s, Y axis: %s', x, y)
+            if abs(x) > deadzone or abs(y) > deadzone:
+                y *= -1
+                p.turn(x)
+            else:
+                x = p.direction
+                y = 0
+            # offset = (x if abs(x) > deadzone or abs(y) > deadzone else p.direction,
+            #           y*-1 if abs(y) > deadzone or abs(x) > deadzone else 0)
+            p.ranged_attack(offset=(x,y))
+            p.stop_walk()
 
     def keyboard_handler(self):
         p = self.get('player')
         pressed = self.keys_pressed
-        left = {keycode.A, keycode.LEFT}
-        right = {keycode.D, keycode.RIGHT}
-        jump = {keycode.SPACE, keycode.W, keycode.UP}
-        down = {keycode.DOWN, keycode.S}
+        left = {keycode.LEFT}
+        right = {keycode.RIGHT}
+        jump = {keycode.SPACE}
+        down = {keycode.DOWN}
+        ranged_attack = {keycode.S}
+        up = {keycode.UP}
+
+        axis = [0,0]
 
         if left.intersection(pressed):
+            axis[0] = -1
             p.walk_left()
         elif right.intersection(pressed):
+            axis[0] = 1
             p.walk_right()
         else:
             p.stop_walk()
+        if up.intersection(pressed):
+            axis[1] = 1
+        elif down.intersection(pressed):
+            axis[1] = -1
         if len(jump.union(down).intersection(pressed)) >= 2:
             p.move_down_through_platform()
         elif jump.intersection(pressed):
             p.jump()
         else:
             p.end_jump()
+        if ranged_attack.intersection(pressed):
+            p.ranged_attack(offset=axis)
+            p.stop_walk()
+
 
     def update(self, *args, **kwargs):
         self.key_handler()
