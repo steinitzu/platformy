@@ -221,6 +221,8 @@ class Player(CollidableSprite):
         self.jump_strength = kwargs.get('jump_strength', 1000)
 
         self.velocity_cap = kwargs.get('velocity_cap', [1000, 0])
+        # Use this for dynamic velocity cap, using a multiplier
+        self._base_velocity_cap = tuple([x for x in self.velocity_cap])
         self.velocity = [0, 0]
         self.acceleration = [0, 0]
         self.gravity = -20000
@@ -258,6 +260,7 @@ class Player(CollidableSprite):
         accel_mod = accel_mod or -1
         self.turn(accel_mod)
         accel = accel_mod*self.walk_acceleration
+        self.velocity_cap[0] = abs(accel_mod)*self._base_velocity_cap[0]
         if self.velocity[0] > 0:
             # Is currently walking right
             # Help slow down
@@ -270,6 +273,7 @@ class Player(CollidableSprite):
         accel_mod = accel_mod or 1
         self.turn(accel_mod)
         accel = accel_mod*self.walk_acceleration
+        self.velocity_cap[0] = abs(accel_mod)*self._base_velocity_cap[0]
         if self.velocity[0] < 0:
             # Is currently walking left
             accel += 1000
