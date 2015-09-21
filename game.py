@@ -132,6 +132,16 @@ class CollidableSprite(sprite.Sprite):
 
     def draw(self):
         super(CollidableSprite, self).draw()
+        if not isinstance(self, BallMan):
+            return
+
+        if log.level == logging.DEBUG:
+            for node in self.parent.path_nodes:
+                x,y = node
+
+                c = Circle(x,y,width=10,color=(0.,.9,0.,1.))
+                c.render()
+
 
         ## Debug draw circle cshape
         # x,y = self.cshape.center
@@ -435,12 +445,14 @@ class Level(layer.Layer):
         self.add(self.build_background(), name='background_layer', z=0)
         self.add(self.build_enemies(), name='enemies_layer', z=2)
         self.cm = collision_model.CollisionManagerBruteForce()
-        self.cm.add(player)
+        #self.cm.add(player)
         for p in self.get('platforms_layer').get_children():
             self.cm.add(p)
         player.cm = self.cm
         for e in self.get('enemies_layer').get_children():
             e.cm = self.cm
+
+        self.path_nodes = self.build_pathnodes()
 
         m = PlatformMove(cm=self.cm)
         player.do(m)
@@ -477,6 +489,35 @@ class Level(layer.Layer):
 
     def build_enemies(self):
         return layer.Layer()
+
+    def build_pathnodes(self):
+        p = self.get('player')
+        p = BallMan()
+        nodes = []
+        for platform in self.get('platforms_layer').get_children():
+            if not platform.is_walkable:
+                continue
+            p.set_rect('left', platform.rect.left)
+            p.set_rect('bottom', platform.rect.top)
+            while True:
+                cols = self.cm.objs_colliding(p)
+                blocked = False
+                for c in cols:
+                    if c.is_wall:
+                        blocked = True
+                        break
+                    else:
+                        continue
+                if not blocked:
+                    node = (p.rect.left, platform.rect.top)
+                    nodes.append(node)
+                    p.set_rect('left', p.rect.left+40)
+                else:
+                    p.set_rect('left', p.rect.left+1)
+                if p.rect.left >= platform.rect.right:
+                    break
+
+        return nodes
 
     def on_key_press(self, key, modifiers):
         self.keys_pressed.add(key)
@@ -564,8 +605,16 @@ class Level(layer.Layer):
             p.ranged_attack(offset=(x, axis[1]))
             p.stop_walk()
 
+    def draw(self):
+
+        super(Level, self).draw()
+
+
+
+
     def update(self, *args, **kwargs):
         self.key_handler()
+
 
 class Level0(Level):
     def __init__(self, player):
