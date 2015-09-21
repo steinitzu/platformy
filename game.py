@@ -27,6 +27,65 @@ def rgba(name, alpha=255):
     return rgb(name) + (alpha,)
 
 
+class RangedAttack(object):
+
+    def __init__(self, player, targets):
+        self.player = player
+        self.targets = targets
+        self.timer = 0.0
+        self.started = False
+        # Cool down period in seconds between shots
+        self.cool_down_time = 0.3
+        # Weapon range in pixels
+        self.range = 1000
+
+    def tick(self, dt):
+        if self.started:
+            self.timer += dt
+            if self.timer >= self.cool_down_time:
+                self.timer = 0.0
+                self.stop()
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.started = False
+
+    def can_perform(self):
+        return self.timer == 0
+
+    def perform(self, target):
+        raise NotImplementedError
+
+    def update(self, dt, *args, **kwargs):
+        self.tick(dt)
+        log.info('Gun timer: %s', self.timer)
+
+
+class Gun(RangedAttack):
+
+    def __init__(self, player, targets):
+        super(Gun, self).__init__(player, targets)
+
+    def get_target(self, offset=(1, 1)):
+        arange = self.range
+        degrees = math.atan2(offset[1], offset[0])*180/math.pi
+        rads = degrees * (math.pi/180)
+        endpoint = (self.player.x+math.cos(rads)*arange,
+                    self.player.y+math.sin(rads)*arange)
+        return endpoint
+
+    def perform(self, offset=(1, 1)):
+        if not self.can_perform():
+            return
+        bullet = Bullet(player=self.player)
+        bullet.position = self.player.position
+        target = self.get_target(offset)
+        self.start()
+        bullet.go(target)
+
+
 class CollidableSprite(sprite.Sprite):
 
     def __init__(self, image, width_multi=0.9, height_multi=0.9):
@@ -54,7 +113,7 @@ class CollidableSprite(sprite.Sprite):
         self.rect.width = int(self.width*width_multi)
         self.rect.height = int(self.height*height_multi)
 
-    def update(self, *args, **kwargs):
+    def update(self, dt, *args, **kwargs):
 
         if self.are_actions_running():
             pass
@@ -233,6 +292,11 @@ class Player(CollidableSprite):
         # X direction either 1 or -1
         self.direction = 1
 
+        # Attacks
+        self.attacks = {'ranged': Gun(self, [])}
+        for a in self.attacks.values():
+            self.schedule(a.update)
+
     def _set_x_accel(self, value):
         self.acceleration[0] = value
 
@@ -298,8 +362,6 @@ class Player(CollidableSprite):
             self.acceleration[0] = 0
             self.velocity[0] = 0
             return
-        #self._set_x_velocity(-self.velocity[0]/2)
-        #return
         if self.velocity[0] < 0:
             self.acceleration[0] = 4000
         elif self.velocity[0] > 0:
@@ -337,33 +399,16 @@ class Player(CollidableSprite):
 
     # Attack stuff
     def ranged_attack(self, offset=(1, 1)):
-        """
-        Give axis offset, x, y.
-        """
-        # TODO: Make range an attribute for attack class
-        arange = 500
-        bullet = Bullet(player=self)
-        bullet.position = self.position
-        log.info('Ranged attack: player.pos:%s, offset: %s',
-                 self.position, offset)
-        degrees = math.atan2(offset[1], offset[0])*180/math.pi
-        rads = degrees * (math.pi/180)
-        endpoint = (self.x+math.cos(rads)*arange,
-                    self.y+math.sin(rads)*arange)
-        log.info('Ranged attack: degrees: %s, rads: %s, endpoint: %s',
-                 degrees, rads, endpoint)
-        bullet.go(endpoint)
+        a = self.attacks['ranged']
+        a.perform(offset)
 
-    def update(self, *args, **kwargs):
-
-        super(Player, self).update(*args, **kwargs)
-        #self.stop_on_platform()
+    def update(self, dt, *args, **kwargs):
+        super(Player, self).update(dt, *args, **kwargs)
         log.debug('Velocity: %s, Acceleration: %s',
                   self.velocity, self.acceleration)
+        log.info(dt)
         if not self.walking:
             self.stop_walk()
-        # Enable floors again after movement is done
-        # so we won't keep falling through
         self.floors_enabled = True
 
 class AIPlayer(Player):
@@ -559,10 +604,10 @@ class Level(layer.Layer):
 
         if left.intersection(pressed):
             axis[0] = -1
-            p.walk_left()
+            p.walk(-1)
         elif right.intersection(pressed):
             axis[0] = 1
-            p.walk_right()
+            p.walk(1)
         else:
             p.stop_walk()
         if up.intersection(pressed):
@@ -576,9 +621,9 @@ class Level(layer.Layer):
         else:
             p.end_jump()
         if ranged_attack.intersection(pressed):
-            p.ranged_attack(offset=axis)
+            x = axis[0] if axis[0] or axis[1] else p.direction
+            p.ranged_attack(offset=(x, axis[1]))
             p.stop_walk()
-
 
     def update(self, *args, **kwargs):
         self.key_handler()
