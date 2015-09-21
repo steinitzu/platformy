@@ -138,58 +138,6 @@ class CollidableSprite(sprite.Sprite):
         # c = Circle(x=x, y=y, width=self.cshape.r*2,  color=(0,0,0,0.4))
         # c.render()
 
-
-class SteiniMove(actions.Action):
-    """Move the target based on parameters on the target.
-
-    For movement the parameters are::
-
-        target.position = (x, y)
-        target.velocity = (dx, dy)
-        target.acceleration = (ddx, ddy) = (0, 0)
-        target.gravity = 0
-
-    And rotation::
-
-        target.rotation
-        target.dr
-        target.ddr
-    """
-
-    def init(self, *args, **kwargs):
-        self.fall_time = 0
-
-    def step(self, dt):
-        x, y = self.target.position
-        dx, dy = self.target.velocity
-        ddx, ddy = getattr(self.target, 'acceleration', (0, 0))
-        if self.target.is_on_solid_ground():
-            gravity = 0
-            self.fall_time = 0.0
-        else:
-            gravity = getattr(self.target, 'gravity', 0)
-            gravity = gravity*self.fall_time
-            log.debug('Gravity: %s, fall_time: %s', gravity, self.fall_time)
-            self.fall_time += dt
-        dx += ddx * dt
-        dy += gravity
-        #dy = ddy + gravity
-        #dy += (ddy + gravity) * dt
-        self.target.velocity = (dx, dy)
-        x += dx * dt
-        y += dy * dt
-        # Save old bottom position (for one way platforms)
-        self.target.old_bottom = self.target.rect.bottom
-        self.target.old_left = self.target.rect.left
-        self.target.old_right = self.target.rect.right
-        self.target.position = (x, y)
-        dr = getattr(self.target, 'dr', 0)
-        ddr = getattr(self.target, 'ddr', 0)
-        if dr or ddr:
-            dr = self.target.dr = dr + ddr*dt
-        if dr:
-            self.target.rotation += dr * dt
-
 class PlatformMove(actions.Action):
     """
     Move and check for collisions in the environment.
@@ -411,10 +359,22 @@ class Player(CollidableSprite):
             self.stop_walk()
         self.floors_enabled = True
 
+
 class AIPlayer(Player):
 
     def __init__(self, *args, **kwargs):
         super(AIPlayer, self).__init__(*args, **kwargs)
+
+
+class EvilBallman(AIPlayer):
+
+    def __init__(self, *args, **kwargs):
+        self.right_image = pyglet.resource.image('ballman72x72.png')
+        self.left_image = pyglet.resource.image('ballman72x72left.png')
+        super(EvilBallman, self).__init__(self.right_image,
+                                          *args,
+                                          width_multi=0.6, height_multi=0.8,
+                                          **kwargs)
 
 
 class BallMan(Player):
@@ -425,6 +385,7 @@ class BallMan(Player):
         super(BallMan, self).__init__(self.right_image,
                                       *args, width_multi=0.6, height_multi=0.8,
                                       **kwargs)
+
 
 class Bullet(CollidableSprite):
 
@@ -506,11 +467,20 @@ class Level(layer.Layer):
         self.add(player, name='player', z=2)
         self.add(self.build_platforms(), name='platforms_layer', z=1)
         self.add(self.build_background(), name='background_layer', z=0)
+        self.add(self.build_enemies(), name='enemies_layer', z=2)
         self.cm = collision_model.CollisionManagerBruteForce()
         self.cm.add(player)
         for p in self.get('platforms_layer').get_children():
             self.cm.add(p)
         player.cm = self.cm
+        for e in self.get('enemies_layer').get_children():
+            e.cm = self.cm
+
+        m = PlatformMove(cm=self.cm)
+        player.do(m)
+        for e in self.get('enemies_layer').get_children():
+            m = PlatformMove(cm=self.cm)
+            e.do(m)
 
         self.schedule(self.update)
         self.is_event_handler = True
@@ -533,10 +503,13 @@ class Level(layer.Layer):
         else:
             self.key_handler = self.keyboard_handler
 
-    def build_platforms():
+    def build_platforms(self):
         return layer.Layer()
 
-    def build_background():
+    def build_background(self):
+        return layer.Layer()
+
+    def build_enemies(self):
         return layer.Layer()
 
     def on_key_press(self, key, modifiers):
@@ -638,10 +611,8 @@ class Level0(Level):
                 self.get('platforms_layer').get_children())
             if not platform.is_wall:
                 break
-        player.set_rect('bottom', platform.rect.top)
+        player.set_rect('bottom', 500)
         player.set_rect('left', platform.rect.left+20)
-        m = PlatformMove(cm=self.cm)
-        player.do(m)
 
     def build_platforms(self):
         x_pos = 0
@@ -696,6 +667,14 @@ class Level0(Level):
         l = layer.ColorLayer(r, g, b, a)
         return l
 
+    def build_enemies(self):
+        l = layer.Layer()
+        for i in range(2):
+            e = EvilBallman()
+            l.add(e)
+            e.set_rect('top', 600)
+            e.set_rect('left', 200)
+        return l
 
 cocos.director.director.init(width=1280, height=720,
                              caption='Ballmonster',
