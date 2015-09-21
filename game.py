@@ -216,9 +216,9 @@ class Player(CollidableSprite):
 
         self.walk_acceleration = kwargs.get('walk_acceleration',
                                             15*config.METER)
-        self.jump_strength = kwargs.get('jump_strength', 40*config.METER)
-        self.velocity_cap = kwargs.get('velocity_cap', [10*config.METER,
-                                                        7*config.METER])
+        self.jump_strength = kwargs.get('jump_strength', 45*config.METER)
+        self.velocity_cap = kwargs.get('velocity_cap', [6*config.METER,
+                                                        7.5*config.METER])
 
         self._base_velocity_cap = tuple([x for x in self.velocity_cap])
         self.velocity = [0, 0]
