@@ -155,17 +155,18 @@ class PlatformMove(actions.Action):
 
         # Acceleration per frame added to velocity
         vx += ax * dt
-        vy += ay * dt
         if vxc and abs(vx) > vxc:
             if vx > 0:
                 vx = vxc
             elif vx < 0:
                 vx = -vxc
-        if vyc and abs(vy) > vyc:
-            if vy > 0:
-                vy = vyc
-            elif vy < 0:
-                vy = -vyc
+        if vyc and vy >= vyc:
+            # No downward velocity cap
+            vy = vyc
+            target.acceleration[1] = 0
+        else:
+            vy += (ay * dt)
+        vy -= (target.gravity*dt)
         target.velocity = [vx, vy]
         # Start moving on X axis, then check for collisions
         old_x = target.x
@@ -186,7 +187,6 @@ class PlatformMove(actions.Action):
                     target.set_rect('left', ob.rect.right)
                     target.velocity[0] = 0
                     target.acceleration[0] = 0
-        # target.y += vy * dt
         old_bottom = target.rect.bottom
         old_top = target.rect.top
         target.set_rect('top', target.rect.top+(vy*dt))
@@ -204,14 +204,6 @@ class PlatformMove(actions.Action):
                 target.set_rect('top', ob.rect.bottom)
                 target.velocity[1] = 0
                 target.acceleration[1] = 0
-        if collides:
-            gravity = 0
-            self.fall_time = 0.0
-        else:
-            gravity = target.gravity
-            self.fall_time += dt
-            target.velocity[1] += (gravity*dt)*self.fall_time
-            #target.velocity[1] += (gravity * self.fall_time * dt)
 
 class Player(CollidableSprite):
 
@@ -222,17 +214,16 @@ class Player(CollidableSprite):
 
         self.floors_enabled = True
 
-        # Maximum walk speed
-        self.walk_acceleration = kwargs.get('walk_acceleration', 2000)
-        # Maximum jump strength
-        self.jump_strength = kwargs.get('jump_strength', 1000)
+        self.walk_acceleration = kwargs.get('walk_acceleration',
+                                            15*config.METER)
+        self.jump_strength = kwargs.get('jump_strength', 40*config.METER)
+        self.velocity_cap = kwargs.get('velocity_cap', [10*config.METER,
+                                                        7*config.METER])
 
-        self.velocity_cap = kwargs.get('velocity_cap', [1000, 0])
-        # Use this for dynamic velocity cap, using a multiplier
         self._base_velocity_cap = tuple([x for x in self.velocity_cap])
         self.velocity = [0, 0]
         self.acceleration = [0, 0]
-        self.gravity = -20000
+        self.gravity = config.GRAVITY
         self.walking = False
 
         self.cm = None
@@ -274,30 +265,7 @@ class Player(CollidableSprite):
         self.turn(accel_mod)
         if self.velocity[0] * accel < 0:
             # Is switching directions
-            accel += accel_mod*1400
-        self.walking = True
-        self.acceleration[0] = accel
-
-    def walk_left(self, accel_mod=None):
-        accel_mod = accel_mod or -1
-        self.turn(accel_mod)
-        accel = accel_mod*self.walk_acceleration
-        self.velocity_cap[0] = abs(accel_mod)*self._base_velocity_cap[0]
-        if self.velocity[0] > 0:
-            # Is currently walking right
-            # Help slow down
-            accel -= 1000
-        self.walking = True
-        self.acceleration[0] = accel
-
-    def walk_right(self, accel_mod=None):
-        accel_mod = accel_mod or 1
-        self.turn(accel_mod)
-        accel = accel_mod*self.walk_acceleration
-        self.velocity_cap[0] = abs(accel_mod)*self._base_velocity_cap[0]
-        if self.velocity[0] < 0:
-            # Is currently walking left
-            accel += 1000
+            accel += accel_mod*self.walk_acceleration
         self.walking = True
         self.acceleration[0] = accel
 
@@ -311,17 +279,15 @@ class Player(CollidableSprite):
             self.velocity[0] = 0
             return
         if self.velocity[0] < 0:
-            self.acceleration[0] = 4000
+            self.acceleration[0] = self.walk_acceleration*4
         elif self.velocity[0] > 0:
-            self.acceleration[0] = -4000
+            self.acceleration[0] = -self.walk_acceleration*4
 
     def jump(self):
-        if self.velocity >= 0:
-            # Can't jump if already falling
-            self.velocity[1] += 95
+        if self.velocity[1] == 0:
+            self.acceleration[1] = self.jump_strength
 
     def end_jump(self):
-        return
         # TODO erase this method
         self._set_y_accel(0)
         self.can_jump = True
@@ -352,8 +318,8 @@ class Player(CollidableSprite):
 
     def update(self, dt, *args, **kwargs):
         super(Player, self).update(dt, *args, **kwargs)
-        log.debug('Velocity: %s, Acceleration: %s',
-                  self.velocity, self.acceleration)
+        log.debug('%s: Velocity: %s, Acceleration: %s',
+                  self, self.velocity, self.acceleration)
         log.info(dt)
         if not self.walking:
             self.stop_walk()
@@ -634,17 +600,17 @@ class Level0(Level):
         l.add(p)
 
         # Make an obstacle
-        p = ObstacleBox()
-        p.rect.left, p.rect.bottom = 500, 30
-        l.add(p)
+        # p = ObstacleBox()
+        # p.rect.left, p.rect.bottom = 500, 30
+        # l.add(p)
 
-        p = ObstacleBox()
-        p.rect.left, p.rect.bottom = 928, 30
-        l.add(p)
+        # p = ObstacleBox()
+        # p.rect.left, p.rect.bottom = 928, 30
+        # l.add(p)
 
-        p = ObstacleBox()
-        p.rect.left, p.rect.bottom = 1050, 30
-        l.add(p)
+        # p = ObstacleBox()
+        # p.rect.left, p.rect.bottom = 1050, 30
+        # l.add(p)
 
         p = ObstacleBox()
         p.rect.left, p.rect.bottom = 928, 400

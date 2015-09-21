@@ -1,7 +1,7 @@
 import logging
 import logging.handlers
 
-LOG_LEVEL = logging.INFO
+LOG_LEVEL = logging.DEBUG
 def init_log():
     log = logging.getLogger('Ballmonster')
     hdlr = logging.StreamHandler()
@@ -16,3 +16,10 @@ def init_log():
     log.addHandler(fhdlr)
     log.setLevel(LOG_LEVEL)
     return log
+
+
+PIXEL = 1
+# 1 meter in pixels
+METER = 100*PIXEL
+# Gravity acceleration in ms
+GRAVITY = 20*METER
