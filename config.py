@@ -9,7 +9,7 @@ def init_log():
         '%(levelname)s:%(asctime)s:%(msecs)d:%(module)s-line:%(lineno)d:%(message)s')
     hdlr.setFormatter(frmter)
     fhdlr = logging.handlers.RotatingFileHandler('programlog.log',
-                                                 maxBytes=2000000,
+                                                 maxBytes=200000,
                                                  backupCount=3)
     fhdlr.setFormatter(frmter)
     log.addHandler(hdlr)

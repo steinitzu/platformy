@@ -295,12 +295,13 @@ class Player(CollidableSprite):
 
     def jump(self):
         if self.velocity[1] == 0:
+            # Set acceleration  only when player is standing on ground
+            # Accelration is stopped in Move Action once player
+            # reaches Y velocity cap
             self.acceleration[1] = self.jump_strength
 
     def end_jump(self):
-        # TODO erase this method
-        self._set_y_accel(0)
-        self.can_jump = True
+        self.acceleration[1] = 0
 
     def move_down(self):
         self._set_y_accel(-self.jump_strength)
@@ -340,6 +341,9 @@ class AIPlayer(Player):
 
     def __init__(self, *args, **kwargs):
         super(AIPlayer, self).__init__(*args, **kwargs)
+
+    def get_edges(self, node, all_nodes):
+        same_y = [n for n in all_nodes if node[1] == n[1]]
 
 
 class EvilBallman(AIPlayer):
@@ -491,32 +495,38 @@ class Level(layer.Layer):
         return layer.Layer()
 
     def build_pathnodes(self):
-        p = self.get('player')
+        log.debug('Building pathnodes for level %s', self)
         p = BallMan()
         nodes = []
         for platform in self.get('platforms_layer').get_children():
+            log.debug('Building pathnodes, platform: %s', platform)
             if not platform.is_walkable:
                 continue
             p.set_rect('left', platform.rect.left)
             p.set_rect('bottom', platform.rect.top)
+            last = False
             while True:
-                cols = self.cm.objs_colliding(p)
+                obstacles = self.cm.objs_colliding(p)
                 blocked = False
-                for c in cols:
-                    if c.is_wall:
+                for obs in obstacles:
+                    if obs.is_wall:
                         blocked = True
                         break
-                    else:
-                        continue
-                if not blocked:
-                    node = (p.rect.left, platform.rect.top)
-                    nodes.append(node)
-                    p.set_rect('left', p.rect.left+40)
-                else:
+                if blocked:
+                    log.debug('Blocked at pos: (%s, %s), moving 1 px right',
+                              p.rect.left, p.rect.bottom)
                     p.set_rect('left', p.rect.left+1)
+                else:
+                    node = (p.rect.left, platform.rect.top)
+                    log.debug('Clear, creating node at: %s', node)
+                    nodes.append(node)
+                    p.set_rect('left', p.rect.left+p.rect.width)
                 if p.rect.left >= platform.rect.right:
-                    break
-
+                    if not last and not blocked:
+                        p.set_rect('left', platform.rect.right)
+                        last = True
+                    else:
+                        break
         return nodes
 
     def on_key_press(self, key, modifiers):
@@ -634,46 +644,42 @@ class Level0(Level):
         l = layer.Layer()
         for i in range(5):
             p = GreyPlatform()
-            p.rect.left, p.rect.bottom = x_pos, 0
+            p.set_rect('left', x_pos), p.set_rect('bottom', 0)
             l.add(p)
             x_pos += p.width
             p.can_traverse_down = False
         p = GreyPlatform()
-        p.rect.left, p.rect.bottom = 100, 160
+        p.set_rect('left', 100)
+        p.set_rect('bottom', 160)
         l.add(p)
         p = GreyPlatform()
-        p.rect.left, p.rect.top = 500, 200
+        p.set_rect('left', 500)
+        p.set_rect('bottom', 200)
         l.add(p)
         p = GreyPlatform()
-        p.rect.left, p.rect.bottom = 300, 400
+        p.set_rect('left', 300)
+        p.set_rect('bottom', 400)
         l.add(p)
-
-        # Make an obstacle
-        # p = ObstacleBox()
-        # p.rect.left, p.rect.bottom = 500, 30
-        # l.add(p)
-
-        # p = ObstacleBox()
-        # p.rect.left, p.rect.bottom = 928, 30
-        # l.add(p)
-
-        # p = ObstacleBox()
-        # p.rect.left, p.rect.bottom = 1050, 30
-        # l.add(p)
 
         p = ObstacleBox()
-        p.rect.left, p.rect.bottom = 928, 400
+        p.set_rect('left', 928)
+        p.set_rect('bottom', 400)
+        l.add(p)
+
+        p = ObstacleBox()
+        p.set_rect('left', 500)
+        p.set_rect('bottom', 24)
         l.add(p)
 
         window = cocos.director.director.get_window_size()
 
         w = Wall()
-        w.rect.left = 0
-        w.rect.bottom = 24
+        w.set_rect('left', 0)
+        w.set_rect('bottom', 24)
         l.add(w)
         w = Wall()
-        w.rect.right = window[0]
-        w.rect.bottom = 24
+        w.set_rect('right', window[0])
+        w.set_rect('bottom', 24)
         l.add(w)
         return l
 
