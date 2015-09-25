@@ -2,15 +2,17 @@ import os
 import random
 import logging
 import math
+import warnings
 
 from webcolors import name_to_rgb as rgb
 import cocos
 from cocos import sprite, layer, actions, collision_model
+from cocos.rect import Rect
 
 import pyglet
 from pyglet.window import key as keycode
 
-from primitives import Circle
+from primitives import Circle, Line
 from util import distance
 import config
 from gamepads import dualshock4
@@ -86,6 +88,34 @@ class Gun(RangedAttack):
         bullet.go(target)
 
 
+class BoundRect(Rect):
+
+    """
+    A Rect object that updates sprite position accordingly on any position changes.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.sprite = kwargs.pop('sprite')
+        super(BoundRect, self).__init__(*args, **kwargs)
+
+    def _set_property(self, name, value):
+        object.__setattr__(self, name, value)
+        self.sprite.position = self.center
+        # TODO: Set sprite cshape as well
+        if hasattr(self.sprite, 'cshape'):
+            self.sprite.cshape.center = self.sprite.position
+
+    def __setattr__(self, name, value):
+        posattrs = ('bottom', 'top', 'left', 'right',
+                    'center', 'midtop', 'midbottom',
+                    'midleft', 'midright', 'topleft', 'topright',
+                    'bottomleft', 'bottomright')
+        if name in posattrs:
+            self._set_property(name, value)
+        else:
+            object.__setattr__(self, name, value)
+
+
 class CollidableSprite(sprite.Sprite):
 
     def __init__(self, image, width_multi=0.9, height_multi=0.9):
@@ -114,21 +144,16 @@ class CollidableSprite(sprite.Sprite):
         self.rect.height = int(self.height*height_multi)
 
     def update(self, dt, *args, **kwargs):
+        pass
 
-        if self.are_actions_running():
-            pass
-            #self.rect.center = self.position
-        else:
-            self.position = self.rect.center
-        self.cshape.center = self.position
-
-    def set_rect(self, attr, value):
+    def get_rect(self):
         """
-        Set a rect attribute and update sprite position accordingly.
+        Overriden to return a BoundRect insted of cocos.rect.Rect
         """
-        self.rect.__setattr__(attr, value)
-        self.position = self.rect.center
-        self.cshape.center = self.position
+        x, y = self.position
+        x -= self.image_anchor_x
+        y -= self.image_anchor_y
+        return BoundRect(x, y, self.width, self.height, sprite=self)
 
     def draw(self):
         super(CollidableSprite, self).draw()
@@ -136,12 +161,11 @@ class CollidableSprite(sprite.Sprite):
             return
 
         if log.level == logging.DEBUG:
-            for node in self.parent.path_nodes:
+            path_nodes = self.parent.path_nodes
+            for node in path_nodes:
                 x,y = node
-
                 c = Circle(x,y,width=10,color=(0.,.9,0.,1.))
                 c.render()
-
 
         ## Debug draw circle cshape
         # x,y = self.cshape.center
@@ -180,40 +204,38 @@ class PlatformMove(actions.Action):
         target.velocity = [vx, vy]
         # Start moving on X axis, then check for collisions
         old_x = target.x
-        target.set_rect('left', target.rect.left+(vx*dt))
-
-        log.debug('Target position: %s', target.position)
+        target.rect.left += (vx*dt)
         log.debug('Target.rect center: %s', target.rect.center)
-        log.debug('Target cshape pos: %s', target.cshape.center)
         for ob in target.cm.objs_colliding(target):
             if not isinstance(ob, Platform):
                 continue
             if ob.is_wall:
                 if vx > 0:
-                    target.set_rect('right', ob.rect.left)
+                    target.rect.right = ob.rect.left
                     target.velocity[0] = 0
                     target.acceleration[0] = 0
                 elif vx < 0:
-                    target.set_rect('left', ob.rect.right)
+                    target.rect.left = ob.rect.right
                     target.velocity[0] = 0
                     target.acceleration[0] = 0
         old_bottom = target.rect.bottom
         old_top = target.rect.top
-        target.set_rect('top', target.rect.top+(vy*dt))
+        target.rect.top += (vy*dt)
         collides = False
         for ob in target.cm.objs_colliding(target):
             if not isinstance(ob, Platform):
                 continue
             if ((target.floors_enabled or not ob.can_traverse_down)
                  and vy < 0 and old_bottom >= ob.rect.top):
-                target.set_rect('bottom', ob.rect.top)
+                target.rect.bottom = ob.rect.top
                 target.velocity[1] = 0
                 target.acceleration[1] = 0
                 collides = True
             elif (ob.is_wall and vy > 0 and old_top <= ob.rect.bottom):
-                target.set_rect('top', ob.rect.bottom)
+                target.rect.top = ob.rect.bottom
                 target.velocity[1] = 0
                 target.acceleration[1] = 0
+
 
 class Player(CollidableSprite):
 
@@ -284,14 +306,16 @@ class Player(CollidableSprite):
         Decellerate to stop position.
         """
         self.walking = False
-        if -5 <= self.velocity[0] <= 5:
+        if self.velocity[0]*self.direction < 0:
+            # To make sure player doesn't accelerate much beyond 0
+            # will stop as soon as he starts travelling in the opposite
+            # direction he's facing
             self.acceleration[0] = 0
             self.velocity[0] = 0
             return
-        if self.velocity[0] < 0:
-            self.acceleration[0] = self.walk_acceleration*4
-        elif self.velocity[0] > 0:
-            self.acceleration[0] = -self.walk_acceleration*4
+        elif abs(self.velocity[0]) > 0:
+            # Accelerate opposite current walk direction
+            self.acceleration[0] = -self.direction*self.walk_acceleration
 
     def jump(self):
         if self.velocity[1] == 0:
@@ -341,9 +365,106 @@ class AIPlayer(Player):
 
     def __init__(self, *args, **kwargs):
         super(AIPlayer, self).__init__(*args, **kwargs)
+        # TODO: Calculate correct jump distance
+        self.max_jump_distance = 200
+        self.max_jump_height = 200
 
     def get_edges(self, node, all_nodes):
+        _test_edges = set()
+        edges = set()
+        # Get all nodes with same y value
         same_y = [n for n in all_nodes if node[1] == n[1]]
+        # Sort them by x value
+        same_y = sorted(same_y)
+        index = same_y.index(node)
+        if index == 0:
+            _test_edges.add(same_y[1])
+        elif index == len(same_y)-1:
+            _test_edges.add(same_y[index-1])
+        else:
+            _test_edges.add(same_y[index+1])
+            _test_edges.add(same_y[index-1])
+        while len(_test_edges) > 0:
+            edge = _test_edges.pop()
+            if abs(edge[0] - node[0]) > self.max_jump_distance:
+                continue
+            # Check for obstacles between the two nodes
+            # start by placing player on the current node
+            x, y = node
+            ex, ey = edge
+            left = False
+            right = False
+            if ex < x:
+                # edge is left of
+                left = True
+                movemod = -1
+            elif ex > x:
+                right = True
+                movemod = 1
+            self.rect.left, self.rect.bottom = x, y
+            path_blocked = False
+            while not path_blocked:
+                if left and self.rect.left < ex:
+                    break
+                elif right and self.rect.left > ex:
+                    break
+                for obstacle in self.cm.objs_colliding(self):
+                    if obstacle.is_wall:
+                        path_blocked = True
+                        break
+                self.rect.left += movemod
+            if not path_blocked:
+                edges.add(edge)
+        different_y = sorted([n for n in all_nodes
+                              if node[1] != n[1]])
+        higher = sorted([n for n in all_nodes
+                         if n[1] > node[1]])
+        lower = sorted([n for n in all_nodes
+                        if n[1] < node[1]])
+        # TODO: get edges for platforms on different y positions
+        # pedge = potential edge
+        for pedge in lower:
+            if abs(pedge[0] - node[0]) > self.max_jump_distance:
+                continue
+            x, y = node
+            ex, ey = pedge
+            left, right = False, False
+            if ex < x:
+                left = True
+                movemod = -1
+            elif ex > x:
+                right = True
+                movemod = 1
+            self.rect.left, self.rect.bottom = node
+            path_blocked = False
+            while not path_blocked:
+                # Start by moving x towards node, then y
+                # Check for obstacles on each iteration
+                # log.debug('Checking edge %s against %s', pedge, node)
+                # log.debug('Dummy position: %s',
+                #           (self.rect.left, self.rect.bottom))
+                if self.rect.left == ex and self.rect.bottom == ey:
+                    break
+                if not self.rect.bottom == ey:
+                    self.rect.bottom -= 1
+                if not self.rect.left == ex:
+                    self.rect.left += movemod
+                for obstacle in self.cm.objs_colliding(self):
+                    if obstacle.is_wall or not obstacle.can_traverse_down:
+                        path_blocked = True
+                        break
+            if not path_blocked:
+                edges.add(pedge)
+
+
+        # for pedge in different_y:
+        #     if (abs(pedge[0]-node[0]) > self.max_jump_distance
+        #         or abs(pedge[1]-node[1] > self.max_jump_height)):
+        #         # Edge is too far away, carry on
+        #         continue
+
+
+        return edges
 
 
 class EvilBallman(AIPlayer):
@@ -410,6 +531,7 @@ class Wall(Platform):
         self.is_wall = True
         self.is_walkable = False
 
+
 class ObstacleBox(Platform):
 
     def __init__(self):
@@ -417,6 +539,7 @@ class ObstacleBox(Platform):
         self.is_wall = True
         self.is_walkable = True
         self.can_traverse_down = False
+
 
 class MouseDisplay(layer.Layer):
 
@@ -438,6 +561,7 @@ class MouseDisplay(layer.Layer):
     def update_crosshair(self, x, y):
         self.crosshair.position = x, y
 
+
 class Level(layer.Layer):
 
     def __init__(self, player):
@@ -453,10 +577,52 @@ class Level(layer.Layer):
         for p in self.get('platforms_layer').get_children():
             self.cm.add(p)
         player.cm = self.cm
+
+        # Path nodes will be {node: {player class: set(edges)}}
+        # edges = self.path_nodes[node][player.__class__]
+        self.path_nodes = self.build_pathnodes()
+
         for e in self.get('enemies_layer').get_children():
             e.cm = self.cm
+            for node in self.path_nodes:
+                edges = e.get_edges(node, self.path_nodes)
+                self.path_nodes[node][e.__class__] = edges
+                log.info('Edges for %s: %s',
+                         node, edges)
 
-        self.path_nodes = self.build_pathnodes()
+        if log.level == logging.DEBUG:
+            #self.add(layer.Layer(), name='debug_layer', z=2)
+            dlayer = cocos.layer.Layer()
+            self.add(dlayer, name='debug_layer', z=2)
+            batch = cocos.batch.BatchableNode()
+            dlayer.add(batch)
+
+            # for i in xrange(50):
+            #     a = (random.randrange(1280),
+            #          random.randrange(720))
+            #     b = (random.randrange(1280),
+            #          random.randrange(720))
+            #     color = rgba('green', 100)
+            #     l = cocos.draw.Line(a, b, color)
+            #     batch.add(l)
+
+
+            e = self.get('enemies_layer').get_children()[0]
+            linecount = 0
+            for node in self.path_nodes:
+                for edge in self.path_nodes[node][e.__class__]:
+                    alpha = 60
+                    if edge[1] > node[1]:
+                        color = rgba('green', alpha)
+                    elif edge[1] < node[1]:
+                        color = rgba('red', alpha)
+                    else:
+                        color = rgba('purple', alpha)
+                    l = cocos.draw.Line(node, edge, color)
+                    linecount +=1
+                    batch.add(l)
+                    #self.get('debug_layer').add(l)
+            log.debug('LineCount: %s', linecount)
 
         m = PlatformMove(cm=self.cm)
         player.do(m)
@@ -497,13 +663,13 @@ class Level(layer.Layer):
     def build_pathnodes(self):
         log.debug('Building pathnodes for level %s', self)
         p = BallMan()
-        nodes = []
+        nodes = set()
         for platform in self.get('platforms_layer').get_children():
             log.debug('Building pathnodes, platform: %s', platform)
             if not platform.is_walkable:
                 continue
-            p.set_rect('left', platform.rect.left)
-            p.set_rect('bottom', platform.rect.top)
+            p.rect.left = platform.rect.left
+            p.rect.bottom = platform.rect.top
             last = False
             while True:
                 obstacles = self.cm.objs_colliding(p)
@@ -515,19 +681,22 @@ class Level(layer.Layer):
                 if blocked:
                     log.debug('Blocked at pos: (%s, %s), moving 1 px right',
                               p.rect.left, p.rect.bottom)
-                    p.set_rect('left', p.rect.left+1)
+                    p.rect.left += 1
                 else:
                     node = (p.rect.left, platform.rect.top)
                     log.debug('Clear, creating node at: %s', node)
-                    nodes.append(node)
-                    p.set_rect('left', p.rect.left+p.rect.width)
+                    nodes.add(node)
+                    p.rect.left += config.METER/2
                 if p.rect.left >= platform.rect.right:
                     if not last and not blocked:
-                        p.set_rect('left', platform.rect.right)
+                        p.rect.left = platform.rect.right
                         last = True
                     else:
                         break
-        return nodes
+        _nodes = {}
+        for node in nodes:
+            _nodes[node] = {}
+        return _nodes
 
     def on_key_press(self, key, modifiers):
         self.keys_pressed.add(key)
@@ -621,7 +790,6 @@ class Level(layer.Layer):
 
 
 
-
     def update(self, *args, **kwargs):
         self.key_handler()
 
@@ -636,50 +804,43 @@ class Level0(Level):
                 self.get('platforms_layer').get_children())
             if not platform.is_wall:
                 break
-        player.set_rect('bottom', 500)
-        player.set_rect('left', platform.rect.left+20)
+        player.rect.left, player.rect.bottom = (
+            platform.rect.left+20, 500)
 
     def build_platforms(self):
         x_pos = 0
         l = layer.Layer()
         for i in range(5):
             p = GreyPlatform()
-            p.set_rect('left', x_pos), p.set_rect('bottom', 0)
+            p.rect.left, p.rect.bottom = x_pos, 0
             l.add(p)
             x_pos += p.width
             p.can_traverse_down = False
         p = GreyPlatform()
-        p.set_rect('left', 100)
-        p.set_rect('bottom', 160)
+        p.rect.left, p.rect.bottom = 100, 160
         l.add(p)
         p = GreyPlatform()
-        p.set_rect('left', 500)
-        p.set_rect('bottom', 200)
+        p.rect.left, p.rect.bottom = 500, 200
         l.add(p)
         p = GreyPlatform()
-        p.set_rect('left', 300)
-        p.set_rect('bottom', 400)
+        p.rect.left, p.rect.bottom = 300, 400
         l.add(p)
 
         p = ObstacleBox()
-        p.set_rect('left', 928)
-        p.set_rect('bottom', 400)
+        p.rect.left, p.rect.bottom = 928, 400
         l.add(p)
 
         p = ObstacleBox()
-        p.set_rect('left', 500)
-        p.set_rect('bottom', 24)
+        p.rect.left, p.rect.bottom = 500, 24
         l.add(p)
 
         window = cocos.director.director.get_window_size()
 
         w = Wall()
-        w.set_rect('left', 0)
-        w.set_rect('bottom', 24)
+        w.rect.left, w.rect.bottom = 0, 24
         l.add(w)
         w = Wall()
-        w.set_rect('right', window[0])
-        w.set_rect('bottom', 24)
+        w.rect.right, w.rect.bottom = window[0], 24
         l.add(w)
         return l
 
@@ -693,20 +854,15 @@ class Level0(Level):
         for i in range(2):
             e = EvilBallman()
             l.add(e)
-            e.set_rect('top', 600)
-            e.set_rect('left', 200)
+            e.rect.left, e.rect.top = 200, 600
         return l
 
 cocos.director.director.init(width=1280, height=720,
                              caption='Ballmonster',
                              autoscale=True, resizable=True,
                              fullscreen=False)
-
-
-#cocos.director.director.fps_display = pyglet.clock.ClockDisplay(color=rgba('blue'))
 cocos.director.director.show_FPS = True
 
-#cocos.director.director.fps_display.color = rgba('blue')
 level0 = Level0(BallMan())
 main_scene = cocos.scene.Scene(level0)
 
