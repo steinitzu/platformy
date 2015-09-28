@@ -13,9 +13,10 @@ import pyglet
 from pyglet.window import key as keycode
 
 from primitives import Circle, Line
-from util import distance
+from util import distance, PriorityQueue
 import config
 from gamepads import dualshock4
+from pathfinding import PathNode
 
 # Have to do this apparently, otherwise resources aren't found?
 pyglet.resource.path = [os.path.join(os.path.realpath(''), 'resources')]
@@ -62,7 +63,6 @@ class RangedAttack(object):
 
     def update(self, dt, *args, **kwargs):
         self.tick(dt)
-        log.info('Gun timer: %s', self.timer)
 
 
 class Gun(RangedAttack):
@@ -163,7 +163,7 @@ class CollidableSprite(sprite.Sprite):
         if log.level == logging.DEBUG:
             path_nodes = self.parent.path_nodes
             for node in path_nodes:
-                x,y = node
+                x,y = node.x, node.y
                 c = Circle(x,y,width=10,color=(0.,.9,0.,1.))
                 c.render()
 
@@ -179,6 +179,7 @@ class PlatformMove(actions.Action):
     """
     def init(self, *args, **kwargs):
         self.fall_time = 0.0
+        self._halt_timer = 0
 
     def step(self, dt):
         target = self.target
@@ -186,6 +187,16 @@ class PlatformMove(actions.Action):
         vx, vy = target.velocity
         vxc, vyc = target.velocity_cap
         ax, ay = target.acceleration
+
+        if hasattr(target, 'halt_time') and target.halt_time:
+            if self._halt_timer < target.halt_time:
+                self._halt_timer += dt
+                vx = 0
+                ax = 0
+                ay = 0
+            else:
+                target.halt_time = 0
+                self._halt_timer = 0
 
         # Acceleration per frame added to velocity
         vx += ax * dt
@@ -267,6 +278,7 @@ class Player(CollidableSprite):
         self.attacks = {'ranged': Gun(self, [])}
         for a in self.attacks.values():
             self.schedule(a.update)
+        self.current_node = None
 
     def _set_x_accel(self, value):
         self.acceleration[0] = value
@@ -346,6 +358,21 @@ class Player(CollidableSprite):
                 return True
         return False
 
+    def set_current_node(self):
+        all_nodes = self.get_ancestor(Level).path_nodes
+        midpoint = (self.rect.left+self.rect.right)/2
+        nearestd = None
+        nearestnode = None
+        for node in all_nodes:
+            d = distance((midpoint, self.rect.bottom),
+                         (node.x, node.y))
+            if not nearestnode or d < nearestd:
+                nearestnode = node
+                nearestd = d
+        self.current_node = nearestnode
+
+        log.debug('%s current node is %s', self, self.current_node)
+
     # Attack stuff
     def ranged_attack(self, offset=(1, 1)):
         a = self.attacks['ranged']
@@ -359,6 +386,7 @@ class Player(CollidableSprite):
         if not self.walking:
             self.stop_walk()
         self.floors_enabled = True
+        self.set_current_node()
 
 
 class AIPlayer(Player):
@@ -369,11 +397,99 @@ class AIPlayer(Player):
         self.max_jump_distance = 200
         self.max_jump_height = 200
 
+        # Target player
+        self.target = None
+        self.path = []
+
+    def _heuristic(self, a, b):
+        (x1, y1) = a.x, a.y
+        (x2, y2) = b.x, b.y
+        return abs(x1 - x2) + abs(y1 - y2)
+
+    def get_path(self, goal):
+        current_node = self.current_node
+        if not current_node or not goal:
+            return []
+        elif current_node == goal:
+            return [goal]
+
+        start = current_node
+        frontier = PriorityQueue()
+        frontier.put(start, 0)
+        came_from = {}
+        cost_so_far = {}
+        came_from[start] = None
+        cost_so_far[start] = 0
+
+        while not frontier.empty():
+            current = frontier.get()
+            if current is goal:
+                break
+            # Get current node edges
+            for next in current.get_edges(self):
+                new_cost = cost_so_far[current] + current.distance(next)
+                if next not in cost_so_far or new_cost < cost_so_far[next]:
+                    cost_so_far[next] = new_cost
+                    priority = new_cost + self._heuristic(goal, next)
+                    frontier.put(next, priority)
+                    came_from[next] = current
+        path = []
+        path.append(goal)
+        current = goal
+        while True:
+            try:
+                current = came_from[current]
+            except KeyError:
+                log.warning('No available path to %s', current)
+                break
+            if not current:
+                break
+            path.append(current)
+        # Pop current node from path
+        path.pop()
+        return path
+
+    def follow(self):
+        if not self.target:
+            return
+        path = self.get_path(self.target.current_node)
+        self.path = path
+
+        log.info('Path: %s', path)
+        try:
+            destination = path.pop()
+        except IndexError:
+            return
+        log.info('Next destination: %s', destination)
+        log.info('Current node: %s', self.current_node)
+        self.go_to_destination(destination)
+
+    def go_to_destination(self, dest):
+        cx, cy = self.rect.left, self.rect.bottom
+        if dest.x < cx:
+            self.walk(-1)
+        elif dest.x > cx:
+            self.walk(1)
+        else:
+            self.stop_walk()
+        if dest.y > cy:
+            self.jump()
+        else:
+            self.end_jump()
+        cnode = self.current_node
+        if dest.y < cy:
+            if (self.velocity[1] == 0
+                and cnode.platform.can_traverse_down):
+                self.move_down_through_platform()
+
+    def halt(self, seconds=1):
+        self.halt_time = seconds
+
     def get_edges(self, node, all_nodes):
         _test_edges = set()
         edges = set()
         # Get all nodes with same y value
-        same_y = [n for n in all_nodes if node[1] == n[1]]
+        same_y = [n for n in all_nodes if node.y == n.y]
         # Sort them by x value
         same_y = sorted(same_y)
         index = same_y.index(node)
@@ -386,12 +502,12 @@ class AIPlayer(Player):
             _test_edges.add(same_y[index-1])
         while len(_test_edges) > 0:
             edge = _test_edges.pop()
-            if abs(edge[0] - node[0]) > self.max_jump_distance:
+            if abs(edge.x - node.x) > self.max_jump_distance:
                 continue
             # Check for obstacles between the two nodes
             # start by placing player on the current node
-            x, y = node
-            ex, ey = edge
+            x, y = node.x, node.y
+            ex, ey = edge.x, edge.y
             left = False
             right = False
             if ex < x:
@@ -404,9 +520,7 @@ class AIPlayer(Player):
             self.rect.left, self.rect.bottom = x, y
             path_blocked = False
             while not path_blocked:
-                if left and self.rect.left < ex:
-                    break
-                elif right and self.rect.left > ex:
+                if self.rect.left == ex:
                     break
                 for obstacle in self.cm.objs_colliding(self):
                     if obstacle.is_wall:
@@ -415,8 +529,7 @@ class AIPlayer(Player):
                 self.rect.left += movemod
             if not path_blocked:
                 edges.add(edge)
-        different_y = sorted([n for n in all_nodes
-                              if node[1] != n[1]])
+
         higher = sorted([n for n in all_nodes
                          if n[1] > node[1]])
         lower = sorted([n for n in all_nodes
@@ -426,16 +539,18 @@ class AIPlayer(Player):
         for pedge in lower:
             if abs(pedge[0] - node[0]) > self.max_jump_distance:
                 continue
-            x, y = node
-            ex, ey = pedge
-            left, right = False, False
+            if (pedge.intersects_platform_x(node.platform)
+                and not node.platform.can_traverse_down):
+                continue
+            x, y = node.x, node.y
+            ex, ey = pedge.x, pedge.y
             if ex < x:
-                left = True
                 movemod = -1
             elif ex > x:
-                right = True
                 movemod = 1
-            self.rect.left, self.rect.bottom = node
+            else:
+                movemod = 0
+            self.rect.left, self.rect.bottom = node.x, node.y
             path_blocked = False
             while not path_blocked:
                 # Start by moving x towards node, then y
@@ -445,26 +560,58 @@ class AIPlayer(Player):
                 #           (self.rect.left, self.rect.bottom))
                 if self.rect.left == ex and self.rect.bottom == ey:
                     break
-                if not self.rect.bottom == ey:
-                    self.rect.bottom -= 1
                 if not self.rect.left == ex:
                     self.rect.left += movemod
+                else:
+                    self.rect.bottom -= 1
+
                 for obstacle in self.cm.objs_colliding(self):
-                    if obstacle.is_wall or not obstacle.can_traverse_down:
+                    if (obstacle == node.platform
+                        and obstacle.can_traverse_down):
+                        continue
+                    path_blocked = True
+                    break
+            if not path_blocked:
+                edges.add(pedge)
+        for pedge in higher:
+            if (pedge.y - node.y > self.max_jump_height
+                or abs(pedge.x - node.x) > self.max_jump_distance):
+                continue
+            if (node.intersects_platform_x(pedge.platform)
+                and pedge.platform.is_wall):
+                continue
+            x, y = node.x, node.y
+            ex, ey = pedge.x, pedge.y
+            if ex < x:
+                movemod = -1
+            elif ex > x:
+                movemod = 1
+            else:
+                movemod = 0
+            self.rect.left, self.rect.bottom = x, y
+            path_blocked = False
+            while not path_blocked:
+                if self.rect.left == ex and self.rect.bottom == ey:
+                    break
+                if not self.rect.bottom == ey:
+                    self.rect.bottom += 1
+                else:
+                    self.rect.left += movemod
+                for obstacle in self.cm.objs_colliding(self):
+                    if obstacle.is_wall:
                         path_blocked = True
                         break
             if not path_blocked:
                 edges.add(pedge)
-
-
-        # for pedge in different_y:
-        #     if (abs(pedge[0]-node[0]) > self.max_jump_distance
-        #         or abs(pedge[1]-node[1] > self.max_jump_height)):
-        #         # Edge is too far away, carry on
-        #         continue
-
-
         return edges
+
+    def update(self, dt, *args, **kwargs):
+        super(AIPlayer, self).update(dt, *args, **kwargs)
+        self.follow()
+        if random.randrange(1000) == 3:
+            log.info('%s halting', self)
+            self.halt(2)
+
 
 
 class EvilBallman(AIPlayer):
@@ -596,32 +743,21 @@ class Level(layer.Layer):
             self.add(dlayer, name='debug_layer', z=2)
             batch = cocos.batch.BatchableNode()
             dlayer.add(batch)
-
-            # for i in xrange(50):
-            #     a = (random.randrange(1280),
-            #          random.randrange(720))
-            #     b = (random.randrange(1280),
-            #          random.randrange(720))
-            #     color = rgba('green', 100)
-            #     l = cocos.draw.Line(a, b, color)
-            #     batch.add(l)
-
-
             e = self.get('enemies_layer').get_children()[0]
             linecount = 0
             for node in self.path_nodes:
                 for edge in self.path_nodes[node][e.__class__]:
                     alpha = 60
-                    if edge[1] > node[1]:
-                        color = rgba('green', alpha)
-                    elif edge[1] < node[1]:
-                        color = rgba('red', alpha)
+                    if edge.y > node.y:
+                        color = rgba('green', 60)
+                    elif edge.y < node.y:
+                        color = rgba('red', 50)
                     else:
-                        color = rgba('purple', alpha)
-                    l = cocos.draw.Line(node, edge, color)
-                    linecount +=1
+                        color = rgba('purple', 50)
+                    l = cocos.draw.Line(
+                        (node.x, node.y), (edge.x, edge.y), color)
+                    linecount += 1
                     batch.add(l)
-                    #self.get('debug_layer').add(l)
             log.debug('LineCount: %s', linecount)
 
         m = PlatformMove(cm=self.cm)
@@ -683,7 +819,7 @@ class Level(layer.Layer):
                               p.rect.left, p.rect.bottom)
                     p.rect.left += 1
                 else:
-                    node = (p.rect.left, platform.rect.top)
+                    node = PathNode(p.rect.left, platform.rect.top, platform)
                     log.debug('Clear, creating node at: %s', node)
                     nodes.add(node)
                     p.rect.left += config.METER/2
@@ -696,6 +832,7 @@ class Level(layer.Layer):
         _nodes = {}
         for node in nodes:
             _nodes[node] = {}
+            node.all_nodes = _nodes
         return _nodes
 
     def on_key_press(self, key, modifiers):
@@ -785,10 +922,7 @@ class Level(layer.Layer):
             p.stop_walk()
 
     def draw(self):
-
         super(Level, self).draw()
-
-
 
     def update(self, *args, **kwargs):
         self.key_handler()
@@ -806,6 +940,9 @@ class Level0(Level):
                 break
         player.rect.left, player.rect.bottom = (
             platform.rect.left+20, 500)
+        for e in self.get('enemies_layer').get_children():
+            e.rect.left, e.rect.bottom = 200,500
+            e.target = player
 
     def build_platforms(self):
         x_pos = 0
