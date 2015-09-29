@@ -273,12 +273,17 @@ class Player(CollidableSprite):
 
         # X direction either 1 or -1
         self.direction = 1
+        self.is_jumping = False
 
         # Attacks
         self.attacks = {'ranged': Gun(self, [])}
         for a in self.attacks.values():
             self.schedule(a.update)
         self.current_node = None
+
+    def get_path_node(self):
+        return PathNode(self.rect.left,
+                        self.rect.bottom)
 
     def _set_x_accel(self, value):
         self.acceleration[0] = value
@@ -330,6 +335,9 @@ class Player(CollidableSprite):
             self.acceleration[0] = -self.direction*self.walk_acceleration
 
     def jump(self):
+        if self.is_jumping:
+            return
+        self.is_jumping = True
         if self.velocity[1] == 0:
             # Set acceleration  only when player is standing on ground
             # Accelration is stopped in Move Action once player
@@ -337,6 +345,7 @@ class Player(CollidableSprite):
             self.acceleration[1] = self.jump_strength
 
     def end_jump(self):
+        self.is_jumping = False
         self.acceleration[1] = 0
 
     def move_down(self):
@@ -359,6 +368,9 @@ class Player(CollidableSprite):
         return False
 
     def set_current_node(self):
+        if self.velocity[1] != 0:
+            # Don't set while in air
+            return
         all_nodes = self.get_ancestor(Level).path_nodes
         midpoint = (self.rect.left+self.rect.right)/2
         nearestd = None
@@ -394,8 +406,8 @@ class AIPlayer(Player):
     def __init__(self, *args, **kwargs):
         super(AIPlayer, self).__init__(*args, **kwargs)
         # TODO: Calculate correct jump distance
-        self.max_jump_distance = 200
-        self.max_jump_height = 200
+        self.max_jump_distance = 400
+        self.max_jump_height = 240
 
         # Target player
         self.target = None
@@ -458,6 +470,8 @@ class AIPlayer(Player):
         log.info('Path: %s', path)
         try:
             destination = path.pop()
+            if destination == self.current_node:
+                destination = self.target.get_path_node()
         except IndexError:
             return
         log.info('Next destination: %s', destination)
@@ -466,7 +480,11 @@ class AIPlayer(Player):
 
     def go_to_destination(self, dest):
         cx, cy = self.rect.left, self.rect.bottom
-        if dest.x < cx:
+        # No jump button release, can always jump
+        self.is_jumping = False
+        if self.current_node == dest:
+            self.stop_walk()
+        elif dest.x < cx:
             self.walk(-1)
         elif dest.x > cx:
             self.walk(1)
@@ -613,7 +631,6 @@ class AIPlayer(Player):
             self.halt(2)
 
 
-
 class EvilBallman(AIPlayer):
 
     def __init__(self, *args, **kwargs):
@@ -732,6 +749,8 @@ class Level(layer.Layer):
         for e in self.get('enemies_layer').get_children():
             e.cm = self.cm
             for node in self.path_nodes:
+                if self.path_nodes[node].has_key(e.__class__):
+                    continue
                 edges = e.get_edges(node, self.path_nodes)
                 self.path_nodes[node][e.__class__] = edges
                 log.info('Edges for %s: %s',
@@ -822,7 +841,7 @@ class Level(layer.Layer):
                     node = PathNode(p.rect.left, platform.rect.top, platform)
                     log.debug('Clear, creating node at: %s', node)
                     nodes.add(node)
-                    p.rect.left += config.METER/2
+                    p.rect.left += 64
                 if p.rect.left >= platform.rect.right:
                     if not last and not blocked:
                         p.rect.left = platform.rect.right
@@ -839,7 +858,10 @@ class Level(layer.Layer):
         self.keys_pressed.add(key)
 
     def on_key_release(self, key, modifiers):
-        self.keys_pressed.remove(key)
+        try:
+            self.keys_pressed.remove(key)
+        except KeyError:
+            pass
 
     def on_mouse_press(self, x, y, buttons, modifiers):
         p = self.get('player')
@@ -962,6 +984,9 @@ class Level0(Level):
         p = GreyPlatform()
         p.rect.left, p.rect.bottom = 300, 400
         l.add(p)
+        p = GreyPlatform()
+        p.rect.left, p.rect.bottom = 800, 200
+        l.add(p)
 
         p = ObstacleBox()
         p.rect.left, p.rect.bottom = 928, 400
@@ -969,6 +994,10 @@ class Level0(Level):
 
         p = ObstacleBox()
         p.rect.left, p.rect.bottom = 500, 24
+        l.add(p)
+
+        p = ObstacleBox()
+        p.rect.left, p.rect.bottom = 1056, 420
         l.add(p)
 
         window = cocos.director.director.get_window_size()
@@ -987,8 +1016,9 @@ class Level0(Level):
         return l
 
     def build_enemies(self):
-        l = layer.Layer()
-        for i in range(2):
+        #l = layer.Layer()
+        l = cocos.batch.BatchNode()
+        for i in range(20):
             e = EvilBallman()
             l.add(e)
             e.rect.left, e.rect.top = 200, 600
