@@ -3,6 +3,7 @@ import random
 import logging
 import math
 import warnings
+from collections import namedtuple
 
 from webcolors import name_to_rgb as rgb
 import cocos
@@ -12,7 +13,7 @@ from cocos.rect import Rect
 import pyglet
 from pyglet.window import key as keycode
 
-from primitives import Circle, Line
+from primitives import Circle
 from util import distance, PriorityQueue
 import config
 from gamepads import dualshock4
@@ -129,16 +130,6 @@ class CollidableSprite(sprite.Sprite):
                                                   box_height/2)
         self.schedule(self.update)
 
-        print log.level
-        if log.level == logging.DEBUG:
-            print 'doing debug'
-            r,g,b,a = rgba('yellow', 100)
-            c = layer.ColorLayer(r,g,b,a,
-                                 width=self.cshape.rx*2,
-                                 height=self.cshape.ry*2)
-            self.add(c, name='cbox')
-            c.position = -c.width/2, -c.height/2
-
         self.rect = self.get_rect()
         self.rect.width = int(self.width*width_multi)
         self.rect.height = int(self.height*height_multi)
@@ -182,6 +173,11 @@ class PlatformMove(actions.Action):
         self._halt_timer = 0
 
     def step(self, dt):
+        # dt is hard coded to 60 fps
+        # Game will run slower at lower than 60 and faster at higher
+        # Prevents "bullet through paper" at low fps
+        if dt > 1.0/30:
+            dt = 1.0/60
         target = self.target
         x, y = target.position
         vx, vy = target.velocity
@@ -439,7 +435,7 @@ class AIPlayer(Player):
                 break
             # Get current node edges
             for next in current.get_edges(self):
-                new_cost = cost_so_far[current] + current.distance(next)
+                new_cost = cost_so_far[current] + current.cost(next)
                 if next not in cost_so_far or new_cost < cost_so_far[next]:
                     cost_so_far[next] = new_cost
                     priority = new_cost + self._heuristic(goal, next)
@@ -503,132 +499,12 @@ class AIPlayer(Player):
     def halt(self, seconds=1):
         self.halt_time = seconds
 
-    def get_edges(self, node, all_nodes):
-        _test_edges = set()
-        edges = set()
-        # Get all nodes with same y value
-        same_y = [n for n in all_nodes if node.y == n.y]
-        # Sort them by x value
-        same_y = sorted(same_y)
-        index = same_y.index(node)
-        if index == 0:
-            _test_edges.add(same_y[1])
-        elif index == len(same_y)-1:
-            _test_edges.add(same_y[index-1])
-        else:
-            _test_edges.add(same_y[index+1])
-            _test_edges.add(same_y[index-1])
-        while len(_test_edges) > 0:
-            edge = _test_edges.pop()
-            if abs(edge.x - node.x) > self.max_jump_distance:
-                continue
-            # Check for obstacles between the two nodes
-            # start by placing player on the current node
-            x, y = node.x, node.y
-            ex, ey = edge.x, edge.y
-            left = False
-            right = False
-            if ex < x:
-                # edge is left of
-                left = True
-                movemod = -1
-            elif ex > x:
-                right = True
-                movemod = 1
-            self.rect.left, self.rect.bottom = x, y
-            path_blocked = False
-            while not path_blocked:
-                if self.rect.left == ex:
-                    break
-                for obstacle in self.cm.objs_colliding(self):
-                    if obstacle.is_wall:
-                        path_blocked = True
-                        break
-                self.rect.left += movemod
-            if not path_blocked:
-                edges.add(edge)
-
-        higher = sorted([n for n in all_nodes
-                         if n[1] > node[1]])
-        lower = sorted([n for n in all_nodes
-                        if n[1] < node[1]])
-        # TODO: get edges for platforms on different y positions
-        # pedge = potential edge
-        for pedge in lower:
-            if abs(pedge[0] - node[0]) > self.max_jump_distance:
-                continue
-            if (pedge.intersects_platform_x(node.platform)
-                and not node.platform.can_traverse_down):
-                continue
-            x, y = node.x, node.y
-            ex, ey = pedge.x, pedge.y
-            if ex < x:
-                movemod = -1
-            elif ex > x:
-                movemod = 1
-            else:
-                movemod = 0
-            self.rect.left, self.rect.bottom = node.x, node.y
-            path_blocked = False
-            while not path_blocked:
-                # Start by moving x towards node, then y
-                # Check for obstacles on each iteration
-                # log.debug('Checking edge %s against %s', pedge, node)
-                # log.debug('Dummy position: %s',
-                #           (self.rect.left, self.rect.bottom))
-                if self.rect.left == ex and self.rect.bottom == ey:
-                    break
-                if not self.rect.left == ex:
-                    self.rect.left += movemod
-                else:
-                    self.rect.bottom -= 1
-
-                for obstacle in self.cm.objs_colliding(self):
-                    if (obstacle == node.platform
-                        and obstacle.can_traverse_down):
-                        continue
-                    path_blocked = True
-                    break
-            if not path_blocked:
-                edges.add(pedge)
-        for pedge in higher:
-            if (pedge.y - node.y > self.max_jump_height
-                or abs(pedge.x - node.x) > self.max_jump_distance):
-                continue
-            if (node.intersects_platform_x(pedge.platform)
-                and pedge.platform.is_wall):
-                continue
-            x, y = node.x, node.y
-            ex, ey = pedge.x, pedge.y
-            if ex < x:
-                movemod = -1
-            elif ex > x:
-                movemod = 1
-            else:
-                movemod = 0
-            self.rect.left, self.rect.bottom = x, y
-            path_blocked = False
-            while not path_blocked:
-                if self.rect.left == ex and self.rect.bottom == ey:
-                    break
-                if not self.rect.bottom == ey:
-                    self.rect.bottom += 1
-                else:
-                    self.rect.left += movemod
-                for obstacle in self.cm.objs_colliding(self):
-                    if obstacle.is_wall:
-                        path_blocked = True
-                        break
-            if not path_blocked:
-                edges.add(pedge)
-        return edges
-
     def update(self, dt, *args, **kwargs):
         super(AIPlayer, self).update(dt, *args, **kwargs)
         self.follow()
         if random.randrange(1000) == 3:
-            log.info('%s halting', self)
-            self.halt(2)
+           log.info('%s halting', self)
+           self.halt(2)
 
 
 class EvilBallman(AIPlayer):
@@ -730,34 +606,50 @@ class Level(layer.Layer):
 
     def __init__(self, player):
         super(Level, self).__init__()
+        self.width = 2560
+        self.height = 1024
         # Get the platforms layer which contains all the
         # platforms as children
-        self.add(player, name='player', z=2)
-        self.add(self.build_platforms(), name='platforms_layer', z=1)
-        self.add(self.build_background(), name='background_layer', z=0)
-        self.add(self.build_enemies(), name='enemies_layer', z=2)
-        self.cm = collision_model.CollisionManagerBruteForce()
+        self.scroller = layer.scrolling.ScrollableLayer()
+        self.scroller.px_width, self.scroller.px_height = (
+             self.width, self.height)
+        V = namedtuple('V', ['width', 'height'])
+        v = V(1280*2, 720)
+        self.scroll_man = layer.scrolling.ScrollingManager()
+        self.scroll_man.add(self.scroller)
+        self.add(self.scroll_man)
+        self.platforms = self.build_platforms()
+        self.background = self.build_background()
+        self.enemies = self.build_enemies()
+        self.player = player
+
+        self.scroller.add(player, name='player', z=2)
+        self.scroller.add(self.platforms, name='platforms_layer', z=1)
+        self.scroller.add(self.background, name='background_layer', z=0)
+        self.scroller.add(self.enemies, name='enemies_layer', z=2)
+        #self.cm = collision_model.CollisionManagerBruteForce()
+        self.cm = collision_model.CollisionManagerGrid(
+            0, self.width, 0, self.height,
+            32, 32)
+
         #self.cm.add(player)
-        for p in self.get('platforms_layer').get_children():
+        for p in self.platforms.get_children():
             self.cm.add(p)
         player.cm = self.cm
 
-        # Path nodes will be {node: {player class: set(edges)}}
-        # edges = self.path_nodes[node][player.__class__]
         self.path_nodes = self.build_pathnodes()
 
-        for e in self.get('enemies_layer').get_children():
+        # Generate graph of edges for each player class per pathnode
+        for e in self.enemies.get_children():
+            # Give the players a reference to the platform
+            # collision manager
             e.cm = self.cm
             for node in self.path_nodes:
-                if self.path_nodes[node].has_key(e.__class__):
-                    continue
-                edges = e.get_edges(node, self.path_nodes)
-                self.path_nodes[node][e.__class__] = edges
+                node.get_edges(e)
                 log.info('Edges for %s: %s',
-                         node, edges)
+                         node, node.edges)
 
         if log.level == logging.DEBUG:
-            #self.add(layer.Layer(), name='debug_layer', z=2)
             dlayer = cocos.layer.Layer()
             self.add(dlayer, name='debug_layer', z=2)
             batch = cocos.batch.BatchableNode()
@@ -765,8 +657,7 @@ class Level(layer.Layer):
             e = self.get('enemies_layer').get_children()[0]
             linecount = 0
             for node in self.path_nodes:
-                for edge in self.path_nodes[node][e.__class__]:
-                    alpha = 60
+                for edge in node.get_edges(e):
                     if edge.y > node.y:
                         color = rgba('green', 60)
                     elif edge.y < node.y:
@@ -781,14 +672,14 @@ class Level(layer.Layer):
 
         m = PlatformMove(cm=self.cm)
         player.do(m)
-        for e in self.get('enemies_layer').get_children():
+        for e in self.enemies.get_children():
             m = PlatformMove(cm=self.cm)
             e.do(m)
 
         self.schedule(self.update)
         self.is_event_handler = True
         self.keys_pressed = set()
-        self.add(MouseDisplay(), name='mouse_display', z=3)
+        self.modifiers = None
 
         # Joysticks
         log.info('Joysticks: %s', pyglet.input.get_joysticks())
@@ -796,9 +687,6 @@ class Level(layer.Layer):
         for j in self.joysticks:
             log.info('Opening joystick: %s', j)
             j.open()
-            j.set_handler('on_joybutton_press', self.on_joybutton_press)
-            j.set_handler('on_joybutton_release', self.on_joybutton_release)
-            j.set_handler('on_joyaxis_motion', self.on_joyaxis_motion)
 
         if self.joysticks:
             self.joystick_player = {self.joysticks[0]: player}
@@ -819,7 +707,7 @@ class Level(layer.Layer):
         log.debug('Building pathnodes for level %s', self)
         p = BallMan()
         nodes = set()
-        for platform in self.get('platforms_layer').get_children():
+        for platform in self.platforms.get_children():
             log.debug('Building pathnodes, platform: %s', platform)
             if not platform.is_walkable:
                 continue
@@ -841,6 +729,7 @@ class Level(layer.Layer):
                     node = PathNode(p.rect.left, platform.rect.top, platform)
                     log.debug('Clear, creating node at: %s', node)
                     nodes.add(node)
+                    node.all_nodes = nodes
                     p.rect.left += 64
                 if p.rect.left >= platform.rect.right:
                     if not last and not blocked:
@@ -848,33 +737,22 @@ class Level(layer.Layer):
                         last = True
                     else:
                         break
-        _nodes = {}
-        for node in nodes:
-            _nodes[node] = {}
-            node.all_nodes = _nodes
-        return _nodes
+        return nodes
 
     def on_key_press(self, key, modifiers):
         self.keys_pressed.add(key)
+        self.modifiers = modifiers
 
     def on_key_release(self, key, modifiers):
         try:
             self.keys_pressed.remove(key)
         except KeyError:
             pass
+        self.modifiers = modifiers
 
     def on_mouse_press(self, x, y, buttons, modifiers):
-        p = self.get('player')
+        p = self.player
         p.ranged_attack((x, y))
-
-    def on_joybutton_press(self, joystick, button):
-        pass
-
-    def on_joybutton_release(self, joystick, button):
-        pass
-
-    def on_joyaxis_motion(self, joystick, axis, value):
-        pass
 
     def joystick_handler(self):
         joystick = self.joysticks[0]
@@ -909,8 +787,9 @@ class Level(layer.Layer):
             p.stop_walk()
 
     def keyboard_handler(self):
-        p = self.get('player')
+        p = self.player
         pressed = self.keys_pressed
+        modifiers = self.modifiers
         left = {keycode.LEFT}
         right = {keycode.RIGHT}
         jump = {keycode.SPACE}
@@ -943,11 +822,39 @@ class Level(layer.Layer):
             p.ranged_attack(offset=(x, axis[1]))
             p.stop_walk()
 
-    def draw(self):
-        super(Level, self).draw()
+        #Eye = namedtuple('Eye', ('x', 'y', 'z'))
+        eye = self.camera.eye
+        if keycode.Y in pressed:
+            if modifiers & keycode.MOD_CTRL:
+                eye.y -= 10
+            else:
+                eye.y += 10
+        x, y = self.scroller.view_x, self.scroller.view_y
+        w, h = self.scroller.view_w, self.scroller.view_h
+        if keycode.X in pressed:
+            if modifiers & keycode.MOD_CTRL:
+                x -= 10
+            else:
+                x += 10
+        self.scroller.set_view(x, y, w, h)
+        if keycode.Z in pressed:
+            if modifiers & keycode.MOD_CTRL:
+
+                eye.z -= 10
+            else:
+                eye.z += 10
+
+        self.camera.eye = eye
 
     def update(self, *args, **kwargs):
         self.key_handler()
+        self.scroll_man.set_focus(self.player.x, self.player.y)
+        # eye = self.camera.eye
+        # Eye = namedtuple('Eye', ['x', 'y', 'z'])
+        # e = Eye(0, 0, eye.z)
+        # self.camera.center = e
+        # log.info('Enemies width: %s, height:%s',
+        #          self.enemies.width, self.enemies.height)
 
 
 class Level0(Level):
@@ -957,19 +864,33 @@ class Level0(Level):
         platform = None
         while True:
             platform = random.choice(
-                self.get('platforms_layer').get_children())
+                self.platforms.get_children())
             if not platform.is_wall:
                 break
         player.rect.left, player.rect.bottom = (
             platform.rect.left+20, 500)
-        for e in self.get('enemies_layer').get_children():
+        for e in self.enemies.get_children():
             e.rect.left, e.rect.bottom = 200,500
             e.target = player
+
+    def build_platforms_random(self):
+        count = 0
+        ps = []
+        while count < 10:
+            x = random.randrange(40, self.width-300)
+            y = random.randrange(40, self.height-100)
+            p = GreyPlatform()
+            p.rect.left, p.rect.bottom = x, y
+            ps.append(p)
+            count += 1
+        return ps
+
 
     def build_platforms(self):
         x_pos = 0
         l = layer.Layer()
-        for i in range(5):
+        while x_pos <= self.width-256:
+        #for i in range(10):
             p = GreyPlatform()
             p.rect.left, p.rect.bottom = x_pos, 0
             l.add(p)
@@ -1006,19 +927,21 @@ class Level0(Level):
         w.rect.left, w.rect.bottom = 0, 24
         l.add(w)
         w = Wall()
-        w.rect.right, w.rect.bottom = window[0], 24
+        w.rect.right, w.rect.bottom = 2560, 24
         l.add(w)
+        for p in self.build_platforms_random():
+            l.add(p)
         return l
 
     def build_background(self):
         r, g, b, a = rgb('white') + (255, )
-        l = layer.ColorLayer(r, g, b, a)
+        l = layer.ColorLayer(r, g, b, a, self.width, self.height)
         return l
 
     def build_enemies(self):
         #l = layer.Layer()
         l = cocos.batch.BatchNode()
-        for i in range(20):
+        for i in range(10):
             e = EvilBallman()
             l.add(e)
             e.rect.left, e.rect.top = 200, 600
