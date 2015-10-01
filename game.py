@@ -4,6 +4,7 @@ import logging
 import math
 import warnings
 from collections import namedtuple
+import threading
 
 from webcolors import name_to_rgb as rgb
 import cocos
@@ -372,12 +373,16 @@ class Player(CollidableSprite):
         nearestd = None
         nearestnode = None
         for node in all_nodes:
-            d = distance((midpoint, self.rect.bottom),
-                         (node.x, node.y))
+            if node.y != self.rect.bottom:
+                continue
+            d = abs(midpoint - node.x)
+            # d = distance((midpoint, self.rect.bottom),
+            #              (node.x, node.y))
             if not nearestnode or d < nearestd:
                 nearestnode = node
                 nearestd = d
-        self.current_node = nearestnode
+        if nearestnode:
+            self.current_node = nearestnode
 
         log.debug('%s current node is %s', self, self.current_node)
 
@@ -390,7 +395,6 @@ class Player(CollidableSprite):
         super(Player, self).update(dt, *args, **kwargs)
         log.debug('%s: Velocity: %s, Acceleration: %s',
                   self, self.velocity, self.acceleration)
-        log.info(dt)
         if not self.walking:
             self.stop_walk()
         self.floors_enabled = True
@@ -407,9 +411,12 @@ class AIPlayer(Player):
 
         # Target player
         self.target = None
+        self.last_target_node = None
+        self.destination = None
         self.path = []
 
     def _heuristic(self, a, b):
+        return a.distance(b)
         (x1, y1) = a.x, a.y
         (x2, y2) = b.x, b.y
         return abs(x1 - x2) + abs(y1 - y2)
@@ -420,6 +427,16 @@ class AIPlayer(Player):
             return []
         elif current_node == goal:
             return [goal]
+        if not self.last_target_node:
+            self.last_target_node = goal
+        elif self.last_target_node == goal:
+            if self.destination not in self.current_node.get_edges(self):
+                pass
+            else:
+                log.info('Reusing last path: %s', self.path)
+                return self.path
+        else:
+            self.last_target_node = goal
 
         start = current_node
         frontier = PriorityQueue()
@@ -458,31 +475,38 @@ class AIPlayer(Player):
         return path
 
     def follow(self):
+        # TODO: Don't pop until player is at destination
         if not self.target:
             return
         path = self.get_path(self.target.current_node)
+        if (not self.destination
+            or self.destination == self.current_node
+            or path != self.path
+            or (len(path) > 0 and self.destination != path[-1])):
+            try:
+                self.destination = self.path.pop()
+            except IndexError:
+                self.path = path
+                return
         self.path = path
-
-        log.info('Path: %s', path)
-        try:
-            destination = path.pop()
-            if destination == self.current_node:
-                destination = self.target.get_path_node()
-        except IndexError:
-            return
-        log.info('Next destination: %s', destination)
+        log.info('Path: %s', self.path)
+        log.info('Next destination: %s', self.destination)
         log.info('Current node: %s', self.current_node)
-        self.go_to_destination(destination)
+        self.go_to_destination(self.destination)
+        return
+
 
     def go_to_destination(self, dest):
         cx, cy = self.rect.left, self.rect.bottom
+        cmidx = (self.rect.left+self.rect.right)/2
+        dx = dest.x - cmidx
         # No jump button release, can always jump
         self.is_jumping = False
         if self.current_node == dest:
             self.stop_walk()
-        elif dest.x < cx:
+        elif dx < -10:
             self.walk(-1)
-        elif dest.x > cx:
+        elif dx > 10:
             self.walk(1)
         else:
             self.stop_walk()
@@ -697,9 +721,9 @@ class Level(layer.Layer):
             self.key_handler = self.keyboard_handler
 
         # TODO: higher screen resolution instead of this
-        eye = self.camera.eye
-        eye.z += 200
-        self.camera.eye = eye
+        # eye = self.camera.eye
+        # eye.z += 200
+        # self.camera.eye = eye
 
     def build_platforms(self):
         return layer.Layer()
@@ -958,7 +982,7 @@ class Level0(Level):
             e.rect.left, e.rect.top = 200, 600
         return l
 
-cocos.director.director.init(width=1280, height=720,
+cocos.director.director.init(width=1920, height=1080,
                              caption='Ballmonster',
                              autoscale=True, resizable=True,
                              fullscreen=False)

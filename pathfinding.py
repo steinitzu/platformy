@@ -26,10 +26,16 @@ class PathNode(object):
         return hash((self.x, self.y))
 
     def __eq__(self, other):
-        return (other.x, other.y) == (self.x, self.y)
+        try:
+            return (other.x, other.y) == (self.x, self.y)
+        except AttributeError:
+            return False
 
     def __ne__(self, other):
-        return (other.x, other.y) != (self.x, self.y)
+        try:
+            return (other.x, other.y) != (self.x, self.y)
+        except AttributeError:
+            return True
 
     def intersects_platform_x(self, platform):
         """
@@ -43,6 +49,11 @@ class PathNode(object):
                         (othernode.x, othernode.y))
 
     def cost(self, othernode):
+        xcost = abs(self.x-othernode.x)
+        ycost = othernode.y - self.y
+        if ycost < 0:
+            ycost = 0
+        return xcost+ycost
         return self.distance(othernode)
 
     def old_get_edges(self, player):
@@ -65,9 +76,8 @@ class PathNode(object):
         _test_edges = set()
         edges = set()
         # Get all nodes with same y value
-        same_y = [n for n in all_nodes if self.y == n.y]
+        same_y = sorted([n for n in all_nodes if self.y == n.y])
         # Sort them by x value
-        same_y = sorted(same_y)
         index = same_y.index(self)
         single = len(same_y) == 1
         if index == 0 and not single:
@@ -108,10 +118,10 @@ class PathNode(object):
             if not path_blocked:
                 edges.add(edge)
 
-        higher = sorted([n for n in all_nodes
-                         if n[1] > self[1]])
-        lower = sorted([n for n in all_nodes
-                        if n[1] < self[1]])
+        higher = [n for n in all_nodes
+                         if n[1] > self[1]]
+        lower = [n for n in all_nodes
+                        if n[1] < self[1]]
         # TODO: get edges for platforms on different y positions
         # pedge = potential edge
         for pedge in lower:
@@ -134,6 +144,8 @@ class PathNode(object):
                 if ((movemod < 0 and player.rect.left <= ex)
                     or (movemod > 0 and player.rect.left >= ex)):
                     player.rect.left = ex
+                if player.rect.bottom < ey:
+                    player.rect.bottom = ey
                 # Start by moving x towards node, then y
                 # Check for obstacles on each iteration
                 # log.debug('Checking edge %s against %s', pedge, node)
@@ -144,7 +156,7 @@ class PathNode(object):
                 if not player.rect.left == ex:
                     player.rect.left += movemod
                 else:
-                    player.rect.bottom -= 1
+                    player.rect.bottom -= px_move
 
                 for obstacle in player.cm.objs_colliding(player):
                     if (obstacle == self.platform
@@ -175,10 +187,12 @@ class PathNode(object):
                 if ((movemod < 0 and player.rect.left <= ex)
                     or (movemod > 0 and player.rect.left >= ex)):
                     player.rect.left = ex
+                if player.rect.bottom > ey:
+                    player.rect.bottom = ey
                 if player.rect.left == ex and player.rect.bottom == ey:
                     break
                 if not player.rect.bottom == ey:
-                    player.rect.bottom += 1
+                    player.rect.bottom += px_move
                 else:
                     player.rect.left += movemod
                 for obstacle in player.cm.objs_colliding(player):
