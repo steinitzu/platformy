@@ -9,6 +9,7 @@ class PathNode(object):
         self.all_nodes = all_nodes
         # Stores edges as {player.__class__: set()}
         self.edges = {}
+        self.unreachable = False
 
     def __getitem__(self, index):
         return (self.x, self.y, self.platform)[index]
@@ -144,7 +145,7 @@ class PathNode(object):
                 if ((movemod < 0 and player.rect.left <= ex)
                     or (movemod > 0 and player.rect.left >= ex)):
                     player.rect.left = ex
-                if player.rect.bottom < ey:
+                if player.rect.bottom <= ey:
                     player.rect.bottom = ey
                 # Start by moving x towards node, then y
                 # Check for obstacles on each iteration
@@ -157,6 +158,8 @@ class PathNode(object):
                     player.rect.left += movemod
                 else:
                     player.rect.bottom -= px_move
+                if player.rect.bottom <= ey:
+                    player.rect.bottom = ey
 
                 for obstacle in player.cm.objs_colliding(player):
                     if (obstacle == self.platform

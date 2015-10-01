@@ -429,6 +429,9 @@ class AIPlayer(Player):
             return [goal]
         if not self.last_target_node:
             self.last_target_node = goal
+        if goal.unreachable:
+            log.info('Goal unreachable: %s', goal)
+            return [current_node]
         elif self.last_target_node == goal:
             if self.destination not in self.current_node.get_edges(self):
                 pass
@@ -466,6 +469,7 @@ class AIPlayer(Player):
                 current = came_from[current]
             except KeyError:
                 log.warning('No available path to %s', current)
+                current.unreachable = True
                 break
             if not current:
                 break
@@ -500,20 +504,25 @@ class AIPlayer(Player):
         cx, cy = self.rect.left, self.rect.bottom
         cmidx = (self.rect.left+self.rect.right)/2
         dx = dest.x - cmidx
+        ndx = dest.x - self.current_node.x
         # No jump button release, can always jump
         self.is_jumping = False
         if self.current_node == dest:
             self.stop_walk()
-        elif dx < -10:
+        elif dx < 0:
             self.walk(-1)
-        elif dx > 10:
+        elif dx > 0:
             self.walk(1)
-        else:
-            self.stop_walk()
-        if dest.y > cy:
+        # if (self.current_node == dest
+        #     or abs(dx) < 20):
+        #     self.stop_walk()
+        if dest.y > cy  or abs(ndx) > config.NODE_SPACING:
             self.jump()
         else:
             self.end_jump()
+        if (abs(dx) < 20
+            and self.velocity[1] != 0):
+            self.stop_walk()
         cnode = self.current_node
         if dest.y < cy:
             if (self.velocity[1] == 0
@@ -673,28 +682,29 @@ class Level(layer.Layer):
                 log.info('Edges for %s: %s',
                          node, node.edges)
 
-        if log.level == logging.DEBUG:
+
             #dlayer = cocos.layer.Layer()
-            dlayer = cocos.batch.BatchableNode()
-            self.scroller.add(dlayer, name='debug_layer', z=2)
-            #batch = cocos.batch.BatchableNode()
-            #dlayer.add(batch)
-            batch = dlayer
-            e = self.enemies.get_children()[0]
-            linecount = 0
-            for node in self.path_nodes:
-                for edge in node.get_edges(e):
-                    if edge.y > node.y:
-                        color = rgba('green', 60)
-                    elif edge.y < node.y:
-                        color = rgba('red', 50)
-                    else:
-                        color = rgba('purple', 50)
-                    l = cocos.draw.Line(
-                        (node.x, node.y), (edge.x, edge.y), color)
-                    linecount += 1
-                    batch.add(l)
-            log.debug('LineCount: %s', linecount)
+        self.dlayer = cocos.batch.BatchableNode()
+
+        #batch = cocos.batch.BatchableNode()
+        #dlayer.add(batch)
+        batch = self.dlayer
+        e = self.enemies.get_children()[0]
+        linecount = 0
+        for node in self.path_nodes:
+            for edge in node.get_edges(e):
+                if edge.y > node.y:
+                    color = rgba('green', 60)
+                elif edge.y < node.y:
+                    color = rgba('red', 50)
+                else:
+                    color = rgba('purple', 50)
+                l = cocos.draw.Line(
+                    (node.x, node.y), (edge.x, edge.y), color)
+                linecount += 1
+                batch.add(l)
+        log.debug('LineCount: %s', linecount)
+
 
         m = PlatformMove(cm=self.cm)
         player.do(m)
@@ -878,6 +888,12 @@ class Level(layer.Layer):
                 eye.z -= 10
             else:
                 eye.z += 10
+        if keycode.D in pressed:
+            try:
+                self.scroller.remove('debug_layer')
+            except:
+                self.scroller.add(self.dlayer, name='debug_layer', z=2)
+            pressed.remove(keycode.D)
 
         self.camera.eye = eye
 

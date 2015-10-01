@@ -23,3 +23,6 @@ PIXEL = 1
 METER = 100*PIXEL
 # Gravity acceleration in ms
 GRAVITY = 20*METER
+FPS = 60
+SPEED = 0.2
+NODE_SPACING = 128
