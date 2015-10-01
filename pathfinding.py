@@ -14,13 +14,22 @@ class PathNode(object):
         return (self.x, self.y, self.platform)[index]
 
     def __str__(self):
-        return '{}, {}'.format(self.x, self.y)
+        return '({}, {})'.format(self.x, self.y)
 
     def __repr__(self):
         return str(self)
 
     def __lt__(self, other):
         return self.x < other.x
+
+    def __hash__(self):
+        return hash((self.x, self.y))
+
+    def __eq__(self, other):
+        return (other.x, other.y) == (self.x, self.y)
+
+    def __ne__(self, other):
+        return (other.x, other.y) != (self.x, self.y)
 
     def intersects_platform_x(self, platform):
         """
@@ -35,7 +44,6 @@ class PathNode(object):
 
     def cost(self, othernode):
         return self.distance(othernode)
-        return abs(self.y - othernode.y)
 
     def old_get_edges(self, player):
         if not self.all_nodes:
@@ -49,6 +57,10 @@ class PathNode(object):
             else:
                 return self.edges[player.__class__]
 
+        # How many pixels to move at a time when checking for
+        # collisions
+        px_move = 20
+
         all_nodes = self.all_nodes
         _test_edges = set()
         edges = set()
@@ -57,7 +69,8 @@ class PathNode(object):
         # Sort them by x value
         same_y = sorted(same_y)
         index = same_y.index(self)
-        if index == 0:
+        single = len(same_y) == 1
+        if index == 0 and not single:
             _test_edges.add(same_y[1])
         elif index == len(same_y)-1:
             _test_edges.add(same_y[index-1])
@@ -72,18 +85,19 @@ class PathNode(object):
             # start by placing player on the current node
             x, y = self.x, self.y
             ex, ey = edge.x, edge.y
-            left = False
-            right = False
             if ex < x:
                 # edge is left of
-                left = True
-                movemod = -1
+                movemod = -px_move
             elif ex > x:
-                right = True
-                movemod = 1
+                movemod = px_move
+            else:
+                movemod = 0
             player.rect.left, player.rect.bottom = x, y
             path_blocked = False
             while not path_blocked:
+                if ((movemod < 0 and player.rect.left <= ex)
+                    or (movemod > 0 and player.rect.left >= ex)):
+                    player.rect.left = ex
                 if player.rect.left == ex:
                     break
                 for obstacle in player.cm.objs_colliding(player):
@@ -109,14 +123,17 @@ class PathNode(object):
             x, y = self.x, self.y
             ex, ey = pedge.x, pedge.y
             if ex < x:
-                movemod = -1
+                movemod = -px_move
             elif ex > x:
-                movemod = 1
+                movemod = px_move
             else:
                 movemod = 0
             player.rect.left, player.rect.bottom = self.x, self.y
             path_blocked = False
             while not path_blocked:
+                if ((movemod < 0 and player.rect.left <= ex)
+                    or (movemod > 0 and player.rect.left >= ex)):
+                    player.rect.left = ex
                 # Start by moving x towards node, then y
                 # Check for obstacles on each iteration
                 # log.debug('Checking edge %s against %s', pedge, node)
@@ -147,14 +164,17 @@ class PathNode(object):
             x, y = self.x, self.y
             ex, ey = pedge.x, pedge.y
             if ex < x:
-                movemod = -1
+                movemod = -px_move
             elif ex > x:
-                movemod = 1
+                movemod = px_move
             else:
                 movemod = 0
             player.rect.left, player.rect.bottom = x, y
             path_blocked = False
             while not path_blocked:
+                if ((movemod < 0 and player.rect.left <= ex)
+                    or (movemod > 0 and player.rect.left >= ex)):
+                    player.rect.left = ex
                 if player.rect.left == ex and player.rect.bottom == ey:
                     break
                 if not player.rect.bottom == ey:

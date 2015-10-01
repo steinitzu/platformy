@@ -152,7 +152,7 @@ class CollidableSprite(sprite.Sprite):
             return
 
         if log.level == logging.DEBUG:
-            path_nodes = self.parent.path_nodes
+            path_nodes = self.get_ancestor(Level).path_nodes
             for node in path_nodes:
                 x,y = node.x, node.y
                 c = Circle(x,y,width=10,color=(0.,.9,0.,1.))
@@ -607,7 +607,7 @@ class Level(layer.Layer):
     def __init__(self, player):
         super(Level, self).__init__()
         self.width = 2560
-        self.height = 1024
+        self.height = 2048
         # Get the platforms layer which contains all the
         # platforms as children
         self.scroller = layer.scrolling.ScrollableLayer()
@@ -630,7 +630,7 @@ class Level(layer.Layer):
         #self.cm = collision_model.CollisionManagerBruteForce()
         self.cm = collision_model.CollisionManagerGrid(
             0, self.width, 0, self.height,
-            32, 32)
+            128, 128)
 
         #self.cm.add(player)
         for p in self.platforms.get_children():
@@ -650,11 +650,13 @@ class Level(layer.Layer):
                          node, node.edges)
 
         if log.level == logging.DEBUG:
-            dlayer = cocos.layer.Layer()
-            self.add(dlayer, name='debug_layer', z=2)
-            batch = cocos.batch.BatchableNode()
-            dlayer.add(batch)
-            e = self.get('enemies_layer').get_children()[0]
+            #dlayer = cocos.layer.Layer()
+            dlayer = cocos.batch.BatchableNode()
+            self.scroller.add(dlayer, name='debug_layer', z=2)
+            #batch = cocos.batch.BatchableNode()
+            #dlayer.add(batch)
+            batch = dlayer
+            e = self.enemies.get_children()[0]
             linecount = 0
             for node in self.path_nodes:
                 for edge in node.get_edges(e):
@@ -694,6 +696,11 @@ class Level(layer.Layer):
         else:
             self.key_handler = self.keyboard_handler
 
+        # TODO: higher screen resolution instead of this
+        eye = self.camera.eye
+        eye.z += 200
+        self.camera.eye = eye
+
     def build_platforms(self):
         return layer.Layer()
 
@@ -715,6 +722,10 @@ class Level(layer.Layer):
             p.rect.bottom = platform.rect.top
             last = False
             while True:
+                if p.rect.left > platform.rect.right:
+                    break
+                if p.rect.left >= self.width:
+                    break
                 obstacles = self.cm.objs_colliding(p)
                 blocked = False
                 for obs in obstacles:
@@ -724,19 +735,19 @@ class Level(layer.Layer):
                 if blocked:
                     log.debug('Blocked at pos: (%s, %s), moving 1 px right',
                               p.rect.left, p.rect.bottom)
-                    p.rect.left += 1
+                    p.rect.left += 128
                 else:
                     node = PathNode(p.rect.left, platform.rect.top, platform)
                     log.debug('Clear, creating node at: %s', node)
                     nodes.add(node)
                     node.all_nodes = nodes
-                    p.rect.left += 64
-                if p.rect.left >= platform.rect.right:
-                    if not last and not blocked:
-                        p.rect.left = platform.rect.right
-                        last = True
-                    else:
-                        break
+                    p.rect.left += 128
+                # if p.rect.left >= platform.rect.right:
+                #     if not last and not blocked:
+                #         p.rect.left = platform.rect.right
+                #         last = True
+                #     else:
+                #         break
         return nodes
 
     def on_key_press(self, key, modifiers):
@@ -756,7 +767,7 @@ class Level(layer.Layer):
 
     def joystick_handler(self):
         joystick = self.joysticks[0]
-        p = self.get('player')
+        p = self.player
         x = joystick.x
         y = joystick.y
         deadzone = 0.4
@@ -876,7 +887,7 @@ class Level0(Level):
     def build_platforms_random(self):
         count = 0
         ps = []
-        while count < 10:
+        while count < 38:
             x = random.randrange(40, self.width-300)
             y = random.randrange(40, self.height-100)
             p = GreyPlatform()
@@ -941,7 +952,7 @@ class Level0(Level):
     def build_enemies(self):
         #l = layer.Layer()
         l = cocos.batch.BatchNode()
-        for i in range(10):
+        for i in range(15):
             e = EvilBallman()
             l.add(e)
             e.rect.left, e.rect.top = 200, 600
